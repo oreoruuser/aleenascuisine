@@ -1,0 +1,38 @@
+# ---------------------------------------------------
+# 1. AWS/SAM Build Artifacts & Configuration
+# ---------------------------------------------------
+# The folder created by 'sam build'. Never commit this.
+.aws-sam/
+# Log files generated during local SAM testing
+.datalab/
+
+# ---------------------------------------------------
+# 2. Python Environment & Dependencies
+# ---------------------------------------------------
+# Virtual Environment (if you use it)
+venv/
+.venv/
+
+# Byte-code files
+*.pyc
+
+# Python cache directories
+__pycache__/
+
+# Dependencies installed locally by pip (from '-t .' command)
+# This prevents checking in all the FastAPI/Mangum/Boto3 files
+# Note: If your requirements were installed directly into 'backend', 
+# you should ignore the individual dependency folders if they are outside a venv.
+# Since your project is structured with a backend folder:
+backend/lib/
+
+# ---------------------------------------------------
+# 3. macOS and System Files
+# ---------------------------------------------------
+.DS_Store
+
+# ---------------------------------------------------
+# 4. IDE (Integrated Development Environment) Files
+# ---------------------------------------------------
+# Ignore all IntelliJ/PyCharm/WebStorm/etc. IDE files
+.idea/

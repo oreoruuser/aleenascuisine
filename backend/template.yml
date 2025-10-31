@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Aleena's Cuisine Backend API
+
+Resources:
+  CakestoreApiFunction:
+    Type: AWS::Serverless::Function
+    DeletionPolicy: Retain 
+    Properties:
+      FunctionName: cakestore-api-handler
+      
+      # This points to your code
+      CodeUri: backend/
+      
+      # This is main.py -> handler = Mangum(app)
+      Handler: main.handler
+      
+      # Your specified runtime
+      Runtime: python3.13
+      
+      # Your specified architecture
+      Architectures:
+        - arm64
+      
+      # Your execution role
+      Role: arn:aws:iam::498192039865:role/Executioner
+      
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+            PayloadFormatVersion: '2.0'
