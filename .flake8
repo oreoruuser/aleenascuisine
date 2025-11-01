@@ -1,0 +1,17 @@
+[flake8]
+# Set line length to match black's default
+max-line-length = 88
+
+# Ignore errors that black handles
+ignore = E203, E501, W503
+
+# Comma-separated list of files/dirs to ignore
+exclude =
+    .git,
+    __pycache__,
+    .aws-sam,
+    build,
+    dist,
+    venv,
+    .venv,
+    env

@@ -1,0 +1,25 @@
+# This is the full config file
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0 # Using a specific, stable version
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+        # --- THIS IS THE FIX ---
+        # Exclude the SAM template, because it uses !Ref
+        # which is not valid, standard YAML.
+        exclude: ^infrastructure/template\.yaml$
+    -   id: check-toml
+
+-   repo: https://github.com/psf/black
+    rev: 23.10.1
+    hooks:
+    -   id: black
+        types: [python]
+
+-   repo: https://github.com/PyCQA/flake8
+    rev: 6.1.0
+    hooks:
+    -   id: flake8
+        types: [python]

@@ -102,7 +102,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AppPrefix}-app"
-      CodeUri: app/
+      CodeUri: ../backend/app/
       Handler: main.handler
       Tracing: Active
       Events:
