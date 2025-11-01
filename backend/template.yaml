@@ -1,0 +1,787 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AleenasCuisine Application (Full Playbook A-G, Final Version)
+
+# ===============================================
+# 1. PARAMETERS (STEP A)
+# ===============================================
+Parameters:
+  Env:
+    Type: String
+    Default: dev
+    Description: The environment name (dev or prod).
+
+  AppPrefix:
+    Type: String
+    Default: aleenascuisine-dev
+    Description: The prefix for all resources (e.g., aleenascuisine-dev).
+
+# ===============================================
+# 2. GLOBALS (STEP A)
+# ===============================================
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 30
+    Tags:
+      Project: aleenascuisine
+      Owner: kevinMathew
+      CostCenter: cseproj
+      Env: !Ref Env
+    # This places all functions in the VPC by default
+    VpcConfig:
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+
+# ===============================================
+# 3. RESOURCES
+# ===============================================
+Resources:
+
+  ##################################################
+  # A. APPLICATION, AUTH & API
+  ##################################################
+
+  ServerlessRestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "${AppPrefix}-api"
+      StageName: !Ref Env
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          MetricsEnabled: true
+          LoggingLevel: INFO
+      TracingEnabled: true
+      Tags:
+        Project: aleenascuisine
+        Owner: kevinMathew
+        CostCenter: cseproj
+        Env: !Ref Env
+
+  FastApiAppFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppPrefix}-app"
+      CodeUri: app/
+      Handler: main.handler
+      Tracing: Active
+      Events:
+        ApiProxy:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+            RestApiId: !Ref ServerlessRestApi
+      Role: arn:aws:iam::498192039865:role/Executioner
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AppPrefix}-user-pool"
+      UserPoolTags:
+        Project: aleenascuisine
+        Owner: kevinMathew
+        CostCenter: cseproj
+        Env: !Ref Env
+
+  ##################################################
+  # B. NETWORKING (VPC, SUBNETS, NAT, ENDPOINTS)
+  ##################################################
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Ref AppPrefix
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  # --- Public Subnets, NAT, and Routing ---
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.100.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-public-a"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.101.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-public-b"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref AppPrefix
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NatEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-nat-eip"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-nat"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-rt-public"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+  PublicSubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  # --- Private Subnets and Routing ---
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-private-a"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-private-b"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AppPrefix}-rt-private"
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  PrivateSubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetA
+  PrivateSubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetB
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DB subnet group for aleenascuisine
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  # --- Security Groups ---
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AppPrefix}-endpoint-sg"
+      GroupDescription: "Security group for VPC Interface Endpoints"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AppPrefix}-lambda-sg"
+      GroupDescription: "Security group for Lambda function"
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AppPrefix}-db-sg"
+      GroupDescription: "Security group for Aurora DB"
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  # --- VPC Endpoints ---
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  RdsDataEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.rds-data"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  RdsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.rds"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  ##################################################
+  # C. DATABASE
+  ##################################################
+
+  DBParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: "Cluster parameter group for aleenascuisine"
+      Family: aurora-mysql8.0
+      Parameters:
+        time_zone: "UTC"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  # --- NEW: IAM Role for Enhanced Monitoring ---
+  RDSMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppPrefix}-rds-monitoring-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      DBClusterIdentifier: !Sub "${AppPrefix}-aurora"
+      DatabaseName: aleenascuisine
+      Engine: aurora-mysql
+      DBClusterParameterGroupName: !Ref DBParameterGroup
+      EnableHttpEndpoint: true
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
+      StorageEncrypted: true
+      KmsKeyId: !Ref KmsKey
+      BackupRetentionPeriod: 7
+      AutoMinorVersionUpgrade: true
+      PreferredMaintenanceWindow: "sun:19:00-sun:19:30"
+      # --- THESE TWO LINES ARE NOW ADDED (and correct) ---
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt RDSMonitoringRole.Arn
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.0
+        MaxCapacity: 2.0
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DBSecurityGroup
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  ##################################################
+  # D. SECRETS & KEYS
+  ##################################################
+  KmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for ${AppPrefix}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Allow-Root-Admin
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AppPrefix}-key"
+      TargetKeyId: !Ref KmsKey
+
+  RazorpaySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AppPrefix}/razorpay"
+      Description: "Razorpay API keys for aleenascuisine"
+      SecretString: '{"key_id": "REPLACE_ME", "key_secret": "REPLACE_ME"}'
+      KmsKeyId: !Ref KmsKey
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AppPrefix}/db"
+      Description: "Database master credentials for aleenascuisine"
+      KmsKeyId: !Ref KmsKey
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  ##################################################
+  # E. STORAGE (S3) & CDN
+  ##################################################
+
+  ImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AppPrefix}-images"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Project
+          Value: aleenascuisine
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: MoveToIA
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+
+  ImagesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ImagesBucket
+      PolicyDocument:
+        Statement:
+          - Action: s3:GetObject
+            Effect: Allow
+            Resource: !Sub "arn:aws:s3:::${AppPrefix}-images/*"
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  InvoicesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AppPrefix}-invoices"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Project
+          Value: aleenascuisine
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: MoveToIA
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA
+
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AppPrefix}-oac-s3"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Origins:
+          - DomainName: !GetAtt ImagesBucket.RegionalDomainName
+            Id: S3-aleenascuisine-images
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: S3-aleenascuisine-images
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  ##################################################
+  # G. OBSERVABILITY & MONITORING
+  ##################################################
+
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/api-gateway/${ServerlessRestApi}"
+      RetentionInDays: 7
+
+  CloudWatchDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${AppPrefix}-Dashboard"
+      DashboardBody: !Sub
+        - |
+          {
+            "widgets": [
+              {
+                "type": "metric",
+                "x": 0, "y": 0, "width": 12, "height": 6,
+                "properties": {
+                  "metrics": [
+                    ["AWS::Lambda", "Errors", "FunctionName", "${LambdaName}", {"label": "Lambda Errors"}],
+                    [".", "Invocations", ".", ".", {"label": "Lambda Invocations"}]
+                  ],
+                  "period": 300, "stat": "Sum", "region": "${AWS::Region}", "title": "Lambda Function Health"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12, "y": 0, "width": 12, "height": 6,
+                "properties": {
+                  "metrics": [
+                    ["AWS/ApiGateway", "5xx", "ApiId", "${ApiId}", {"label": "API 5xx Errors"}],
+                    [".", "4xx", ".", ".", {"label": "API 4xx Errors"}]
+                  ],
+                  "period": 300, "stat": "Sum", "region": "${AWS::Region}", "title": "API Gateway Health"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0, "y": 6, "width": 12, "height": 6,
+                "properties": {
+                  "metrics": [
+                    ["AWS/RDS", "ServerlessDatabaseCapacity", "DBClusterIdentifier", "${DbClusterId}", {"label": "Aurora ACU"}]
+                  ],
+                  "period": 300, "stat": "Average", "region": "${AWS::Region}", "title": "Database ACU Usage"
+                }
+              }
+            ]
+          }
+        - LambdaName: !Ref FastApiAppFunction
+          ApiId: !Ref ServerlessRestApi
+          DbClusterId: !Ref AuroraCluster
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppPrefix}-Lambda-Errors"
+      AlarmDescription: "Alarm if Lambda error rate exceeds 1% in 5 minutes"
+      MetricName: "Errors"
+      Namespace: "AWS/Lambda"
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FastApiAppFunction
+      Statistic: "Sum"
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      TreatMissingData: "notBreaching"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  ApiGateway5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppPrefix}-API-5xx-Errors"
+      AlarmDescription: "Alarm if API Gateway 5xx errors spike"
+      MetricName: "5xx"
+      Namespace: "AWS/ApiGateway"
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref ServerlessRestApi
+      Statistic: "Sum"
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      TreatMissingData: "notBreaching"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  AuroraAcuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppPrefix}-Aurora-ACU-High"
+      AlarmDescription: "Alarm if Aurora ACU usage is over 75% of max"
+      MetricName: "ServerlessDatabaseCapacity"
+      Namespace: "AWS/RDS"
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref AuroraCluster
+      Statistic: "Average"
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1.5
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      TreatMissingData: "notBreaching"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  SecretsManagerAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppPrefix}-Secrets-Access-Errors"
+      AlarmDescription: "Alarm on any Secrets Manager access error"
+      MetricName: "GetSecretValue.Failed"
+      Namespace: "AWS/SecretsManager"
+      Statistic: "Sum"
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      TreatMissingData: "notBreaching"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj

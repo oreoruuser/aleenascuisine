@@ -1,14 +1,25 @@
 version = 0.1
 
-[default.deploy.parameters]
-stack_name = "aleenas-cuisine-backend"
-resolve_s3 = true
-s3_prefix = "aleenas-cuisine-backend"
+[dev.deploy.parameters]
+stack_name = "aleenascuisine-dev"
+s3_bucket = "aleenascuisine-sam-artifacts" # <-- This tells SAM to use your bucket
 confirm_changeset = true
-capabilities = "CAPABILITY_IAM"
 disable_rollback = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = "Env=\"dev\" AppPrefix=\"aleenascuisine-dev\""
 image_repositories = []
-parameter_overrides = "FunctionAlreadyExists=\"True\""
 
-[default.global.parameters]
+[dev.global.parameters]
+region = "ap-south-1"
+
+[prod.deploy.parameters]
+stack_name = "aleenascuisine-prod"
+s3_bucket = "aleenascuisine-sam-artifacts" # <-- This tells SAM to use your bucket
+region = "ap-south-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = "Env=\"prod\" AppPrefix=\"aleenascuisine-prod\""
+image_repositories = []
+
+[prod.global.parameters]
 region = "ap-south-1"
