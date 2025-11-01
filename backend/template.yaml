@@ -30,7 +30,6 @@ Globals:
       Owner: kevinMathew
       CostCenter: cseproj
       Env: !Ref Env
-    # This places all functions in the VPC by default
     VpcConfig:
       SubnetIds:
         - !Ref PrivateSubnetA
@@ -46,6 +45,22 @@ Resources:
   ##################################################
   # A. APPLICATION, AUTH & API
   ##################################################
+
+  # --- This Log Group must be defined *before* the API that uses it ---
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/api-gateway/${AppPrefix}-api"
+      RetentionInDays: 7
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   ServerlessRestApi:
     Type: AWS::Serverless::Api
@@ -67,6 +82,22 @@ Resources:
         CostCenter: cseproj
         Env: !Ref Env
 
+  # --- This Log Group must be defined *before* the Function and Filters that use it ---
+  FastApiAppFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-app"
+      RetentionInDays: 7
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
   FastApiAppFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -82,6 +113,7 @@ Resources:
             Method: ANY
             RestApiId: !Ref ServerlessRestApi
       Role: arn:aws:iam::498192039865:role/Executioner
+    DependsOn: FastApiAppFunctionLogGroup
 
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
@@ -110,6 +142,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   # --- Public Subnets, NAT, and Routing ---
   PublicSubnetA:
@@ -126,6 +160,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   PublicSubnetB:
     Type: AWS::EC2::Subnet
@@ -141,6 +177,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -152,6 +190,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
@@ -169,6 +209,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   NatGateway:
     Type: AWS::EC2::NatGateway
@@ -182,6 +224,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -194,6 +238,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
   PublicRoute:
     Type: AWS::EC2::Route
     Properties:
@@ -225,6 +271,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   PrivateSubnetB:
     Type: AWS::EC2::Subnet
@@ -239,6 +287,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -251,6 +301,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
   PrivateRoute:
     Type: AWS::EC2::Route
     Properties:
@@ -282,6 +334,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   # --- Security Groups ---
   EndpointSecurityGroup:
@@ -302,6 +356,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -316,6 +372,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   DBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -323,6 +381,11 @@ Resources:
       GroupName: !Sub "${AppPrefix}-db-sg"
       GroupDescription: "Security group for Aurora DB"
       VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EndpointSecurityGroup
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -330,6 +393,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   # --- VPC Endpoints ---
   S3GatewayEndpoint:
@@ -351,6 +416,15 @@ Resources:
         - !Ref PrivateSubnetB
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
+      Tags: # <-- TAGS ARE NOW FIXED
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   RdsDataEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -363,6 +437,15 @@ Resources:
         - !Ref PrivateSubnetB
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
+      Tags: # <-- TAGS ARE NOW FIXED
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   LogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -375,6 +458,15 @@ Resources:
         - !Ref PrivateSubnetB
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
+      Tags: # <-- TAGS ARE NOW FIXED
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   RdsEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -387,6 +479,15 @@ Resources:
         - !Ref PrivateSubnetB
       SecurityGroupIds:
         - !Ref EndpointSecurityGroup
+      Tags: # <-- TAGS ARE NOW FIXED
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   ##################################################
   # C. DATABASE
@@ -406,8 +507,9 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
-  # --- NEW: IAM Role for Enhanced Monitoring ---
   RDSMonitoringRole:
     Type: AWS::IAM::Role
     Properties:
@@ -428,6 +530,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   AuroraCluster:
     Type: AWS::RDS::DBCluster
@@ -444,7 +548,6 @@ Resources:
       BackupRetentionPeriod: 7
       AutoMinorVersionUpgrade: true
       PreferredMaintenanceWindow: "sun:19:00-sun:19:30"
-      # --- THESE TWO LINES ARE NOW ADDED (and correct) ---
       MonitoringInterval: 60
       MonitoringRoleArn: !GetAtt RDSMonitoringRole.Arn
       ServerlessV2ScalingConfiguration:
@@ -460,6 +563,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   ##################################################
   # D. SECRETS & KEYS
@@ -485,6 +590,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   KmsKeyAlias:
     Type: AWS::KMS::Alias
@@ -506,6 +613,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   DBSecret:
     Type: AWS::SecretsManager::Secret
@@ -525,6 +634,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   ##################################################
   # E. STORAGE (S3) & CDN
@@ -638,16 +749,51 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   ##################################################
   # G. OBSERVABILITY & MONITORING
   ##################################################
 
-  ApiGatewayLogGroup:
-    Type: AWS::Logs::LogGroup
+  AlarmsSNSTopic:
+    Type: AWS::SNS::Topic
     Properties:
-      LogGroupName: !Sub "/aws/api-gateway/${ServerlessRestApi}"
-      RetentionInDays: 7
+      DisplayName: !Sub "${AppPrefix}-alarms"
+      Subscription:
+        - Endpoint: "kevin.mathew@example.com" # <-- REPLACE THIS
+          Protocol: email
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  ErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref FastApiAppFunctionLogGroup
+      FilterPattern: "ERROR"
+      MetricTransformations:
+        - MetricName: !Sub "${AppPrefix}-lambda-errors-logged"
+          MetricNamespace: "AleenasCuisine/Logs"
+          MetricValue: "1"
+    DependsOn: FastApiAppFunctionLogGroup
+
+  WarningMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref FastApiAppFunctionLogGroup
+      FilterPattern: "WARNING"
+      MetricTransformations:
+        - MetricName: !Sub "${AppPrefix}-lambda-warnings-logged" # <-- TYPO IS FIXED HERE
+          MetricNamespace: "AleenasCuisine/Logs"
+          MetricValue: "1"
+    DependsOn: FastApiAppFunctionLogGroup
 
   CloudWatchDashboard:
     Type: AWS::CloudWatch::Dashboard
@@ -711,6 +857,7 @@ Resources:
       Threshold: 1
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       TreatMissingData: "notBreaching"
+      AlarmActions: [ !Ref AlarmsSNSTopic ]
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -718,6 +865,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   ApiGateway5xxAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -735,6 +884,7 @@ Resources:
       Threshold: 5
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       TreatMissingData: "notBreaching"
+      AlarmActions: [ !Ref AlarmsSNSTopic ]
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -742,6 +892,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   AuroraAcuAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -759,6 +911,7 @@ Resources:
       Threshold: 1.5
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       TreatMissingData: "notBreaching"
+      AlarmActions: [ !Ref AlarmsSNSTopic ]
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -766,6 +919,8 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
 
   SecretsManagerAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -780,6 +935,7 @@ Resources:
       Threshold: 1
       ComparisonOperator: "GreaterThanOrEqualToThreshold"
       TreatMissingData: "notBreaching"
+      AlarmActions: [ !Ref AlarmsSNSTopic ]
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -787,3 +943,5 @@ Resources:
           Value: kevinMathew
         - Key: CostCenter
           Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
