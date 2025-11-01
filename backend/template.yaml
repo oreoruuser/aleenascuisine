@@ -23,6 +23,8 @@ Globals:
   Function:
     Runtime: python3.13
     Timeout: 30
+    Architectures:
+      - arm64
     Tags:
       Project: aleenascuisine
       Owner: kevinMathew
