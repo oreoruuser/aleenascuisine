@@ -46,6 +46,21 @@ def get_db_credentials():
 # --- End of update ---
 
 
+def get_database_url():
+    """Returns the SQLAlchemy URL, respecting DATABASE_URL override."""
+    override = os.environ.get("DATABASE_URL")
+    if override:
+        return override
+
+    db_creds = get_db_credentials()
+    url_template = config.get_main_option("sqlalchemy.url")
+    if not url_template:
+        raise ValueError(
+            "sqlalchemy.url is not defined in alembic.ini and DATABASE_URL override not provided"
+        )
+    return url_template % db_creds
+
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -63,7 +78,7 @@ target_metadata = None
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = config.get_main_option("sqlalchemy.url")
+    url = get_database_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -78,17 +93,9 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
 
-    # Get the credentials from AWS
-    db_creds = get_db_credentials()
-
-    # Get the base URL string from alembic.ini
-    url_template = config.get_main_option("sqlalchemy.url")
-
-    # Build the final connection URL
+    db_url = get_database_url()
     connect_args = {}
-    db_url = url_template % db_creds
 
-    # Create the SQLAlchemy engine
     engine = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

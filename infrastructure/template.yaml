@@ -2,6 +2,12 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: AleenasCuisine Application (Full Playbook A-G, Final Version)
 
+Conditions:
+  HasLambdaExecutionRoleArn: !Not [ !Equals [ !Ref LambdaExecutionRoleArn, "" ] ]
+  HasKeyAdminArn: !And
+    - !Not [ !Equals [ !Ref KeyAdminArn, "" ] ]
+    - !Not [ !Equals [ !Ref KeyAdminArn, "NONE" ] ]
+
 # ===============================================
 # 1. PARAMETERS (STEP A)
 # ===============================================
@@ -16,12 +22,37 @@ Parameters:
     Default: aleenascuisine-dev
     Description: The prefix for all resources (e.g., aleenascuisine-dev).
 
+  LambdaExecutionRoleArn:
+    Type: String
+    Default: ""
+    Description: ARN of the pre-provisioned Lambda execution role with least-privilege access.
+
+  NotificationEmail:
+    Type: String
+    Default: matkevin00@gmail.com
+    Description: Email address for operational alerts and budget notifications.
+
+  ApiAllowedOrigin:
+    Type: String
+    Default: http://localhost:3000
+    Description: Allowed origin for CORS on the API Gateway stage.
+
+  MonthlyBudgetAmount:
+    Type: Number
+    Default: 30
+    Description: Monthly AWS cost budget threshold in USD.
+
+  KeyAdminArn:
+    Type: String
+    Default: ""
+    Description: IAM principal ARN granted administrative control of the CMK (set to NONE to skip dedicated admin access).
+
 # ===============================================
 # 2. GLOBALS (STEP A)
 # ===============================================
 Globals:
   Function:
-    Runtime: python3.13
+    Runtime: python3.12
     Timeout: 30
     Architectures:
       - arm64
@@ -62,25 +93,114 @@ Resources:
         - Key: Project
           Value: aleenascuisine
 
-  ServerlessRestApi:
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppPrefix}-apigw-logs"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  AleenasCuisineApi:
     Type: AWS::Serverless::Api
+    DependsOn:
+      - ApiGatewayAccount
     Properties:
       Name: !Sub "${AppPrefix}-api"
       StageName: !Ref Env
-      AccessLogSetting:
-        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
-        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength"}'
+      Cors:
+        AllowOrigin: !Sub "'${ApiAllowedOrigin}'"
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
       MethodSettings:
         - ResourcePath: "/*"
           HttpMethod: "*"
           MetricsEnabled: true
           LoggingLevel: INFO
+          ThrottlingRateLimit: 20
+          ThrottlingBurstLimit: 60
       TracingEnabled: true
       Tags:
         Project: aleenascuisine
         Owner: kevinMathew
         CostCenter: cseproj
         Env: !Ref Env
+
+  ApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - AleenasCuisineApiStage
+    Properties:
+      UsagePlanName: !Sub "${AppPrefix}-${Env}-default"
+      Description: Baseline throttling profile for the ${Env} stage.
+      Throttle:
+        BurstLimit: 60
+        RateLimit: 20
+      Quota:
+        Limit: 100000
+        Period: MONTH
+      ApiStages:
+        - ApiId: !Ref AleenasCuisineApi
+          Stage: !Ref Env
+      Tags:
+        - Key: Project
+          Value: aleenascuisine
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Env
+          Value: !Ref Env
+
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn:
+      - AleenasCuisineApiStage
+    Properties:
+      Name: !Sub "${AppPrefix}-${Env}-default-key"
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref AleenasCuisineApi
+          StageName: !Ref Env
+      Tags:
+        - Key: Project
+          Value: aleenascuisine
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Env
+          Value: !Ref Env
+
+  UsagePlanKeyAssociation:
+    Type: AWS::ApiGateway::UsagePlanKey
+    DependsOn:
+      - ApiUsagePlan
+      - ApiKey
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref ApiUsagePlan
 
   # --- This Log Group must be defined *before* the Function and Filters that use it ---
   FastApiAppFunctionLogGroup:
@@ -111,8 +231,8 @@ Resources:
           Properties:
             Path: /{proxy+}
             Method: ANY
-            RestApiId: !Ref ServerlessRestApi
-      Role: arn:aws:iam::498192039865:role/Executioner
+            RestApiId: !Ref AleenasCuisineApi
+      Role: !Ref LambdaExecutionRoleArn
     DependsOn: FastApiAppFunctionLogGroup
 
   CognitoUserPool:
@@ -566,6 +686,25 @@ Resources:
         - Key: Project
           Value: aleenascuisine
 
+  AuroraClusterInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "${AppPrefix}-aurora-instance-1"
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-mysql
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
   ##################################################
   # D. SECRETS & KEYS
   ##################################################
@@ -582,6 +721,44 @@ Resources:
             Principal:
               AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
             Action: "kms:*"
+            Resource: "*"
+          - !If
+            - HasKeyAdminArn
+            - Sid: Allow-Key-Admin
+              Effect: Allow
+              Principal:
+                AWS: !Ref KeyAdminArn
+              Action:
+                - kms:Describe*
+                - kms:List*
+                - kms:Get*
+                - kms:Create*
+                - kms:Update*
+                - kms:Enable*
+                - kms:Disable*
+                - kms:ScheduleKeyDeletion
+                - kms:CancelKeyDeletion
+              Resource: "*"
+            - !Ref AWS::NoValue
+          - Sid: Allow-Lambda-Use
+            Effect: Allow
+            Principal:
+              AWS: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !Sub "arn:aws:iam::${AWS::AccountId}:root"]
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: "*"
+          - Sid: Allow-Secrets-Manager-Use
+            Effect: Allow
+            Principal:
+              Service: secretsmanager.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
             Resource: "*"
       Tags:
         - Key: Env
@@ -666,6 +843,8 @@ Resources:
             Transitions:
               - TransitionInDays: 30
                 StorageClass: STANDARD_IA
+              - TransitionInDays: 365
+                StorageClass: GLACIER
 
   ImagesBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -707,6 +886,8 @@ Resources:
             Transitions:
               - TransitionInDays: 30
                 StorageClass: STANDARD_IA
+              - TransitionInDays: 365
+                StorageClass: GLACIER
 
   CloudFrontOriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
@@ -761,7 +942,7 @@ Resources:
     Properties:
       DisplayName: !Sub "${AppPrefix}-alarms"
       Subscription:
-        - Endpoint: "kevin.mathew@example.com" # <-- REPLACE THIS
+        - Endpoint: !Ref NotificationEmail
           Protocol: email
       Tags:
         - Key: Env
@@ -838,7 +1019,7 @@ Resources:
             ]
           }
         - LambdaName: !Ref FastApiAppFunction
-          ApiId: !Ref ServerlessRestApi
+          ApiId: !Ref AleenasCuisineApi
           DbClusterId: !Ref AuroraCluster
 
   LambdaErrorAlarm:
@@ -877,7 +1058,7 @@ Resources:
       Namespace: "AWS/ApiGateway"
       Dimensions:
         - Name: ApiId
-          Value: !Ref ServerlessRestApi
+          Value: !Ref AleenasCuisineApi
       Statistic: "Sum"
       Period: 300
       EvaluationPeriods: 1
@@ -945,3 +1126,39 @@ Resources:
           Value: cseproj
         - Key: Project
           Value: aleenascuisine
+
+  MonthlyCostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "${AppPrefix}-${Env}-monthly-budget"
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetAmount
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            ThresholdType: PERCENTAGE
+            Threshold: 50
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            ThresholdType: PERCENTAGE
+            Threshold: 80
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            ThresholdType: PERCENTAGE
+            Threshold: 100
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
