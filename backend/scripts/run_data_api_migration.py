@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import textwrap
+from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Iterable
@@ -64,7 +65,7 @@ def main(target_revision: str = "head") -> int:
     )
 
     cfg = Config(str(ALEMBIC_INI))
-    cfg.set_main_option("script_location", "alembic")
+    cfg.set_main_option("script_location", str(ROOT_DIR / "alembic"))
 
     buffer = StringIO()
 
@@ -80,13 +81,19 @@ def main(target_revision: str = "head") -> int:
     # Ensure env.py does not try to resolve Secrets Manager when rendering SQL.
     os.environ.setdefault("DATABASE_URL", "mysql://")
 
-    command.upgrade(cfg, target_revision, sql=True)
+    with redirect_stdout(buffer):
+        command.upgrade(cfg, target_revision, sql=True)
     sql_blob = buffer.getvalue()
+
+    if not sql_blob.strip():
+        print("No SQL emitted by Alembic; database may already be current.")
+        return 0
 
     client = boto3.client("rds-data", region_name=region)
     statements = list(_iter_sql_statements(sql_blob))
+    print(f"Parsed {len(statements)} statements from Alembic output.")
     if not statements:
-        print("No SQL statements generated; database is already up to date.")
+        print("No SQL statements parsed from Alembic output; nothing to execute.")
         return 0
 
     print(f"Executing {len(statements)} statements against {database} via Data API...")

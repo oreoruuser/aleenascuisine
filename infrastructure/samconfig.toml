@@ -6,7 +6,7 @@ s3_bucket = "aleenascuisine-sam-artifacts" # <-- This tells SAM to use your buck
 confirm_changeset = true
 disable_rollback = true
 capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
-parameter_overrides = "Env=\"dev\" AppPrefix=\"aleenascuisine-dev\" LambdaExecutionRoleArn=\"arn:aws:iam::498192039865:role/Executioner\" NotificationEmail=\"matkevin00@gmail.com\" ApiAllowedOrigin=\"http://localhost:3000\" MonthlyBudgetAmount=\"30\" KeyAdminArn=\"NONE\" EnableAuroraScheduler=\"true\" AuroraStartCron=\"cron(0 6 * * ? *)\" AuroraStopCron=\"cron(0 1 * * ? *)\" AuroraScheduleTimezone=\"Asia/Kolkata\""
+parameter_overrides = "Env=\"dev\" AppPrefix=\"aleenascuisine-dev\" LambdaExecutionRoleArn=\"\" NotificationEmail=\"matkevin00@gmail.com\" ApiAllowedOrigin=\"http://localhost:3000\" MonthlyBudgetAmount=\"30\" KeyAdminArn=\"NONE\" EnableAuroraScheduler=\"true\" AuroraStartCron=\"cron(0 6 * * ? *)\" AuroraStopCron=\"cron(0 1 * * ? *)\" AuroraScheduleTimezone=\"Asia/Kolkata\" CognitoClientId=\"5vej45qocof8pvnvqdk905q420\""
 image_repositories = []
 
 [dev.global.parameters]
@@ -17,8 +17,9 @@ stack_name = "aleenascuisine-prod"
 s3_bucket = "aleenascuisine-sam-artifacts" # <-- This tells SAM to use your bucket
 region = "ap-south-1"
 confirm_changeset = true
+disable_rollback = false
 capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
-parameter_overrides = "Env=\"prod\" AppPrefix=\"aleenascuisine-prod\" LambdaExecutionRoleArn=\"arn:aws:iam::498192039865:role/Executioner\" NotificationEmail=\"matkevin00@gmail.com\" ApiAllowedOrigin=\"https://app.aleenascuisine.com\" MonthlyBudgetAmount=\"60\" KeyAdminArn=\"NONE\" EnableAuroraScheduler=\"true\" AuroraStartCron=\"cron(0 6 * * ? *)\" AuroraStopCron=\"cron(0 1 * * ? *)\" AuroraScheduleTimezone=\"Asia/Kolkata\""
+parameter_overrides = "Env=\"prod\" AppPrefix=\"aleenascuisine-prod\" LambdaExecutionRoleArn=\"\" NotificationEmail=\"matkevin00@gmail.com\" ApiAllowedOrigin=\"https://app.aleenascuisine.com\" MonthlyBudgetAmount=\"60\" KeyAdminArn=\"NONE\" EnableAuroraScheduler=\"true\" AuroraStartCron=\"cron(0 6 * * ? *)\" AuroraStopCron=\"cron(0 1 * * ? *)\" AuroraScheduleTimezone=\"Asia/Kolkata\" CognitoClientId=\"7kn52t9m3jnnfongsj7q09nfot\""
 image_repositories = []
 
 [prod.global.parameters]

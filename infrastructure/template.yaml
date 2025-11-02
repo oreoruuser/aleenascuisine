@@ -8,6 +8,8 @@ Conditions:
     - !Not [ !Equals [ !Ref KeyAdminArn, "" ] ]
     - !Not [ !Equals [ !Ref KeyAdminArn, "NONE" ] ]
   HasAuroraScheduler: !Equals [ !Ref EnableAuroraScheduler, "true" ]
+  HasCognitoClientId: !Not [ !Equals [ !Ref CognitoClientId, "" ] ]
+  CreateLambdaExecutionRole: !Equals [ !Ref LambdaExecutionRoleArn, "" ]
 
 # ===============================================
 # 1. PARAMETERS (STEP A)
@@ -70,6 +72,27 @@ Parameters:
     Type: String
     Default: Asia/Kolkata
     Description: IANA timezone name for Aurora start/stop schedules.
+
+  ApiVersion:
+    Type: String
+    Default: v1
+    Description: Semantic version exposed by the public API.
+
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues:
+      - CRITICAL
+      - ERROR
+      - WARNING
+      - INFO
+      - DEBUG
+    Description: Application logging verbosity for the Lambda function.
+
+  CognitoClientId:
+    Type: String
+    Default: ""
+    Description: App client ID from the Cognito user pool used by the backend.
 
 # ===============================================
 # 2. GLOBALS (STEP A)
@@ -249,6 +272,23 @@ Resources:
       CodeUri: ../backend/app/
       Handler: main.handler
       Tracing: Active
+      Environment:
+        Variables:
+          API_VERSION: !Ref ApiVersion
+          REGION: !Ref AWS::Region
+          DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
+          DB_SECRET_ARN: !Ref DBSecret
+          RAZORPAY_SECRET_ARN: !Ref RazorpaySecret
+          JWT_SECRET_ARN: !Ref JwtSecret
+          WHATSAPP_SECRET_ARN: !Ref WhatsAppSecret
+          S3_BUCKET_IMAGES: !Ref ImagesBucket
+          S3_BUCKET_INVOICES: !Ref InvoicesBucket
+          POST_PAYMENT_QUEUE_URL: !Ref PostPaymentQueue
+          ALEENA_ENV: !Ref Env
+          LOG_LEVEL: !Ref LogLevel
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
+          COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
       Events:
         ApiProxy:
           Type: Api
@@ -256,8 +296,72 @@ Resources:
             Path: /{proxy+}
             Method: ANY
             RestApiId: !Ref AleenasCuisineApi
-      Role: !Ref LambdaExecutionRoleArn
+      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
     DependsOn: FastApiAppFunctionLogGroup
+
+  PostPaymentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AppPrefix}-order-paid"
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Project
+          Value: aleenascuisine
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  OrderPaidWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-order-paid-worker"
+      RetentionInDays: 7
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  OrderPaidWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppPrefix}-order-paid-worker"
+      CodeUri: ../backend/app/
+      Handler: workers.order_paid.handle
+      Timeout: 120
+      Tracing: Active
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
+          DB_SECRET_ARN: !Ref DBSecret
+          RAZORPAY_SECRET_ARN: !Ref RazorpaySecret
+          JWT_SECRET_ARN: !Ref JwtSecret
+          WHATSAPP_SECRET_ARN: !Ref WhatsAppSecret
+          S3_BUCKET_INVOICES: !Ref InvoicesBucket
+          POST_PAYMENT_QUEUE_URL: !Ref PostPaymentQueue
+          ALEENA_ENV: !Ref Env
+          LOG_LEVEL: !Ref LogLevel
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
+          COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
+      Events:
+        OrderPaidQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt PostPaymentQueue.Arn
+            BatchSize: 5
+            MaximumBatchingWindowInSeconds: 5
+      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
+    DependsOn: OrderPaidWorkerLogGroup
 
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
@@ -268,6 +372,33 @@ Resources:
         Owner: kevinMathew
         CostCenter: cseproj
         Env: !Ref Env
+
+  CognitoUserPoolIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${AppPrefix}/cognito/user-pool-id"
+      Description: Cognito user pool ID for the backend service.
+      Type: String
+      Value: !Ref CognitoUserPool
+      Tags:
+        Env: !Ref Env
+        Project: aleenascuisine
+        Owner: kevinMathew
+        CostCenter: cseproj
+
+  CognitoClientIdParameter:
+    Type: AWS::SSM::Parameter
+    Condition: HasCognitoClientId
+    Properties:
+      Name: !Sub "/${AppPrefix}/cognito/client-id"
+      Description: Cognito app client ID for the backend service.
+      Type: String
+      Value: !Ref CognitoClientId
+      Tags:
+        Env: !Ref Env
+        Project: aleenascuisine
+        Owner: kevinMathew
+        CostCenter: cseproj
 
   ##################################################
   # B. NETWORKING (VPC, SUBNETS, NAT, ENDPOINTS)
@@ -918,12 +1049,81 @@ Resources:
       AliasName: !Sub "alias/${AppPrefix}-key"
       TargetKeyId: !Ref KmsKey
 
+  DefaultLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: CreateLambdaExecutionRole
+    Properties:
+      RoleName: !Sub "${AppPrefix}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: !Sub "${AppPrefix}-lambda-inline"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource:
+                  - !Ref DBSecret
+                  - !Ref RazorpaySecret
+                  - !Ref JwtSecret
+                  - !Ref WhatsAppSecret
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                Resource: !GetAtt KmsKey.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                Resource: !GetAtt PostPaymentQueue.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:DeleteMessageBatch
+                  - sqs:ChangeMessageVisibility
+                  - sqs:ChangeMessageVisibilityBatch
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                Resource: !GetAtt PostPaymentQueue.Arn
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${InvoicesBucket}"
+                  - !Sub "arn:aws:s3:::${InvoicesBucket}/*"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
   RazorpaySecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub "${AppPrefix}/razorpay"
       Description: "Razorpay API keys for aleenascuisine"
-      SecretString: '{"key_id": "REPLACE_ME", "key_secret": "REPLACE_ME"}'
       KmsKeyId: !Ref KmsKey
       Tags:
         - Key: Env
@@ -946,6 +1146,38 @@ Resources:
         GenerateStringKey: "password"
         PasswordLength: 16
         ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  JwtSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AppPrefix}/jwt"
+      Description: "JWT signing material for aleenascuisine"
+      KmsKeyId: !Ref KmsKey
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  WhatsAppSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AppPrefix}/whatsapp"
+      Description: "WhatsApp integration credentials for aleenascuisine"
+      KmsKeyId: !Ref KmsKey
       Tags:
         - Key: Env
           Value: !Ref Env
