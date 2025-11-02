@@ -7,6 +7,7 @@ Conditions:
   HasKeyAdminArn: !And
     - !Not [ !Equals [ !Ref KeyAdminArn, "" ] ]
     - !Not [ !Equals [ !Ref KeyAdminArn, "NONE" ] ]
+  HasAuroraScheduler: !Equals [ !Ref EnableAuroraScheduler, "true" ]
 
 # ===============================================
 # 1. PARAMETERS (STEP A)
@@ -46,6 +47,29 @@ Parameters:
     Type: String
     Default: ""
     Description: IAM principal ARN granted administrative control of the CMK (set to NONE to skip dedicated admin access).
+
+  EnableAuroraScheduler:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Toggle scheduled start/stop automation for the Aurora cluster.
+
+  AuroraStartCron:
+    Type: String
+    Default: "cron(0 6 * * ? *)"
+    Description: EventBridge Scheduler cron expression (in AuroraScheduleTimezone) that starts the Aurora cluster.
+
+  AuroraStopCron:
+    Type: String
+    Default: "cron(0 1 * * ? *)"
+    Description: EventBridge Scheduler cron expression (in AuroraScheduleTimezone) that stops the Aurora cluster.
+
+  AuroraScheduleTimezone:
+    Type: String
+    Default: Asia/Kolkata
+    Description: IANA timezone name for Aurora start/stop schedules.
 
 # ===============================================
 # 2. GLOBALS (STEP A)
@@ -705,9 +729,113 @@ Resources:
         - Key: Project
           Value: aleenascuisine
 
+  AuroraStopSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: HasAuroraScheduler
+    DependsOn:
+      - AuroraCluster
+      - AuroraSchedulerRole
+    Properties:
+      Name: !Sub "${AppPrefix}-aurora-stop"
+      Description: Stop Aurora cluster during low-traffic overnight window (IST).
+      ScheduleExpression: !Ref AuroraStopCron
+      ScheduleExpressionTimezone: !Ref AuroraScheduleTimezone
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:rds:stopDBCluster
+        RoleArn: !GetAtt AuroraSchedulerRole.Arn
+        Input: !Sub |
+          {"DbClusterIdentifier":"${AppPrefix}-aurora"}
+
+  AuroraStartSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: HasAuroraScheduler
+    DependsOn:
+      - AuroraCluster
+      - AuroraSchedulerRole
+    Properties:
+      Name: !Sub "${AppPrefix}-aurora-start"
+      Description: Start Aurora cluster before business hours (IST).
+      ScheduleExpression: !Ref AuroraStartCron
+      ScheduleExpressionTimezone: !Ref AuroraScheduleTimezone
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:rds:startDBCluster
+        RoleArn: !GetAtt AuroraSchedulerRole.Arn
+        Input: !Sub |
+          {"DbClusterIdentifier":"${AppPrefix}-aurora"}
+
   ##################################################
   # D. SECRETS & KEYS
   ##################################################
+  AuroraSchedulerRole:
+    Type: AWS::IAM::Role
+    Condition: HasAuroraScheduler
+    Properties:
+      RoleName: !Sub "${AppPrefix}-aurora-scheduler"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${AppPrefix}-aurora-scheduler-policy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:StartDBCluster
+                  - rds:StopDBCluster
+                Resource: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  KmsKeyAdminRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppPrefix}-kms-admin"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSKeyManagementServicePowerUser
+      Policies:
+        - PolicyName: !Sub "${AppPrefix}-kms-admin-inline"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:*
+                Resource: "*"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
   KmsKey:
     Type: AWS::KMS::Key
     Properties:
@@ -739,7 +867,21 @@ Resources:
                 - kms:ScheduleKeyDeletion
                 - kms:CancelKeyDeletion
               Resource: "*"
-            - !Ref AWS::NoValue
+            - Sid: Allow-Stack-Key-Admin
+              Effect: Allow
+              Principal:
+                AWS: !GetAtt KmsKeyAdminRole.Arn
+              Action:
+                - kms:Describe*
+                - kms:List*
+                - kms:Get*
+                - kms:Create*
+                - kms:Update*
+                - kms:Enable*
+                - kms:Disable*
+                - kms:ScheduleKeyDeletion
+                - kms:CancelKeyDeletion
+              Resource: "*"
           - Sid: Allow-Lambda-Use
             Effect: Allow
             Principal:
@@ -1162,3 +1304,11 @@ Resources:
           Subscribers:
             - SubscriptionType: EMAIL
               Address: !Ref NotificationEmail
+
+Outputs:
+  KmsKeyAdminRoleArn:
+    Description: ARN of the stack-managed role with customer-managed KMS administration permissions.
+    Value: !GetAtt KmsKeyAdminRole.Arn
+  KmsKeyArn:
+    Description: ARN of the AleenasCuisine CMK.
+    Value: !GetAtt KmsKey.Arn
