@@ -1,0 +1,156 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 2,
+      "properties": {
+        "markdown": "# Aleena's Cuisine Ops Dashboard\nEnvironment: ${Env}"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 2,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Orders Created",
+        "region": "ap-south-1",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          [ "AleenasCuisine/Application", "orders_created", "Environment", "${Env}" ]
+        ],
+        "stat": "Sum",
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 2,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Payments Success",
+        "region": "ap-south-1",
+        "view": "timeSeries",
+        "metrics": [
+          [ "AleenasCuisine/Application", "payments_success", "Environment", "${Env}" ]
+        ],
+        "stat": "Sum",
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 8,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Webhook Failures",
+        "region": "ap-south-1",
+        "view": "bar",
+        "metrics": [
+          [ "AleenasCuisine/Application", "webhook_failures", "Environment", "${Env}" ]
+        ],
+        "stat": "Sum",
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 8,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Order Processing Time (ms)",
+        "region": "ap-south-1",
+        "view": "timeSeries",
+        "metrics": [
+          [ "AleenasCuisine/Application", "order_processing_time", "Environment", "${Env}" ]
+        ],
+        "stat": "Average",
+        "period": 300,
+        "yAxis": {
+          "left": {
+            "label": "Milliseconds"
+          }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 14,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Lambda Errors",
+        "region": "ap-south-1",
+        "view": "timeSeries",
+        "metrics": [
+          [ "AWS/Lambda", "Errors", "FunctionName", "${AppPrefix}-app" ]
+        ],
+        "stat": "Sum",
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 14,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "SQS Queue Depth",
+        "region": "ap-south-1",
+        "view": "timeSeries",
+        "metrics": [
+          [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${AppPrefix}-order-paid" ]
+        ],
+        "stat": "Average",
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 20,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Aurora Capacity (ACU)",
+        "region": "ap-south-1",
+        "view": "timeSeries",
+        "metrics": [
+          [ "AWS/RDS", "ServerlessDatabaseCapacity", "DBClusterIdentifier", "${AppPrefix}-aurora" ]
+        ],
+        "stat": "Maximum",
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 20,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "API Latency",
+        "region": "ap-south-1",
+        "view": "timeSeries",
+        "metrics": [
+          [ "AWS/ApiGateway", "Latency", "ApiName", "${AppPrefix}-api", "Stage", "${Env}" ]
+        ],
+        "stat": "Average",
+        "period": 300
+      }
+    }
+  ]
+}

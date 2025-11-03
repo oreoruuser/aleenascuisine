@@ -32,16 +32,24 @@ class OrderSummary(BaseModel):
     inventory_released: bool = Field(
         False, description="True once reserved stock returns to inventory"
     )
+    is_test: bool = Field(
+        False, description="True when the order was created in test mode"
+    )
 
 
 class OrderDetail(OrderSummary):
-    customer_id: str
+    customer_id: Optional[str] = Field(
+        None, description="Customer UUID when available; null for guest checkouts"
+    )
     totals: MoneyBreakdown
     payment_id: Optional[str]
     provider_order_id: Optional[str]
     provider_payment_id: Optional[str]
     idempotency_key: Optional[str]
     updated_at: datetime
+    payment_is_test: bool = Field(
+        False, description="True when the latest payment is flagged as a test"
+    )
 
 
 class OrderCreateResponse(BaseModel):

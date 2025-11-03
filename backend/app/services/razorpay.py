@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 from dataclasses import dataclass
@@ -151,15 +153,30 @@ class RazorpayService:
             raise RazorpayWebhookVerificationError("Webhook signature header missing.")
         try:
             utility = getattr(razorpay, "utility", None)
-            if utility is None:
-                raise RazorpayWebhookVerificationError(
-                    "Razorpay utility module is unavailable for signature verification."
-                )
-            utility.verify_webhook_signature(  # type: ignore[attr-defined]
-                body.decode("utf-8"), signature, self._webhook_secret
+            verifier = (
+                getattr(utility, "verify_webhook_signature", None) if utility else None
             )
+            if callable(verifier):
+                verifier(body.decode("utf-8"), signature, self._webhook_secret)  # type: ignore[arg-type]
+                return
         except SignatureVerificationError as exc:  # pragma: no cover - SDK surface
             raise RazorpayWebhookVerificationError("Invalid webhook signature") from exc
+
+        # Fall back to manual HMAC check when the SDK helper is unavailable.
+        computed = hmac.new(
+            self._webhook_secret.encode("utf-8"),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(computed, signature):
+            logger.warning(
+                "razorpay_webhook_signature_mismatch",
+                extra={
+                    "expected": computed,
+                    "provided": signature,
+                },
+            )
+            raise RazorpayWebhookVerificationError("Invalid webhook signature")
 
 
 class StubRazorpayService(RazorpayService):

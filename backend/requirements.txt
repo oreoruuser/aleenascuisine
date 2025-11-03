@@ -8,3 +8,5 @@ PyMySQL==1.1.1
 boto3==1.34.142
 PyJWT==2.9.0
 cryptography==43.0.1
+razorpay==2.0.0
+aws-xray-sdk==2.12.1

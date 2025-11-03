@@ -1,0 +1,134 @@
+{
+  "info": {
+    "name": "Aleena's Cuisine API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Postman collection covering primary Phase B flows for Aleena's Cuisine"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/health",
+          "host": [ "{{base_url}}" ],
+          "path": [ "api", "v1", "health" ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Create Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customer\": {\n    \"name\": \"Test User\",\n    \"phone\": \"+919898989898\"\n  },\n  \"items\": [\n    { \"sku\": \"BIRIYANI_L\", \"quantity\": 2 }\n  ],\n  \"special_instructions\": \"extra raita\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/orders",
+          "host": [ "{{base_url}}" ],
+          "path": [ "api", "v1", "orders" ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Get Order",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/orders/{{order_id}}",
+          "host": [ "{{base_url}}" ],
+          "path": [ "api", "v1", "orders", "{{order_id}}" ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Webhook Callback",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Razorpay-Signature",
+            "value": "{{webhook_signature}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"payment.captured\",\n  \"payload\": {\n    \"payment\": {\n      \"entity\": {\n        \"id\": \"pay_ABC123\",\n        \"order_id\": \"{{razorpay_order_id}}\",\n        \"amount\": 120000,\n        \"currency\": \"INR\",\n        \"status\": \"captured\",\n        \"notes\": {\n          \"internal_order_id\": \"{{order_id}}\"\n        }\n      }\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/webhooks/razorpay",
+          "host": [ "{{base_url}}" ],
+          "path": [ "api", "v1", "webhooks", "razorpay" ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "List Orders",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/orders?limit=20&status=paid",
+          "host": [ "{{base_url}}" ],
+          "path": [ "api", "v1", "orders" ],
+          "query": [
+            { "key": "limit", "value": "20" },
+            { "key": "status", "value": "paid" }
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.environment.get('base_url')) {",
+          "  throw new Error('Set base_url (e.g. https://xyz.execute-api.ap-south-1.amazonaws.com/prod)');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "https://api.aleenascuisine.com" },
+    { "key": "jwt_token", "value": "<paste Cognito JWT>" },
+    { "key": "order_id", "value": "" },
+    { "key": "webhook_signature", "value": "" },
+    { "key": "razorpay_order_id", "value": "" }
+  ]
+}

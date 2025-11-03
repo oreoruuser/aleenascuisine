@@ -10,6 +10,8 @@ Conditions:
   HasAuroraScheduler: !Equals [ !Ref EnableAuroraScheduler, "true" ]
   HasCognitoClientId: !Not [ !Equals [ !Ref CognitoClientId, "" ] ]
   CreateLambdaExecutionRole: !Equals [ !Ref LambdaExecutionRoleArn, "" ]
+  IsProdEnv: !Equals [ !Ref Env, "prod" ]
+  HasWebAcl: !Not [ !Equals [ !Ref WebAclArn, "" ] ]
 
 # ===============================================
 # 1. PARAMETERS (STEP A)
@@ -49,6 +51,16 @@ Parameters:
     Type: String
     Default: ""
     Description: IAM principal ARN granted administrative control of the CMK (set to NONE to skip dedicated admin access).
+
+  WhatsAppPhoneNumberId:
+    Type: String
+    Default: ""
+    Description: Optional WhatsApp Business phone number ID used for customer notifications.
+
+  WhatsAppDefaultRecipient:
+    Type: String
+    Default: ""
+    Description: Default WhatsApp recipient phone number in international format.
 
   EnableAuroraScheduler:
     Type: String
@@ -94,6 +106,11 @@ Parameters:
     Default: ""
     Description: App client ID from the Cognito user pool used by the backend.
 
+  WebAclArn:
+    Type: String
+    Default: ""
+    Description: Optional AWS WAFv2 Web ACL ARN associated with the API Gateway stage.
+
 # ===============================================
 # 2. GLOBALS (STEP A)
 # ===============================================
@@ -129,7 +146,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/api-gateway/${AppPrefix}-api"
-      RetentionInDays: 7
+      RetentionInDays: 90
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -179,6 +196,18 @@ Resources:
         AllowOrigin: !Sub "'${ApiAllowedOrigin}'"
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
+      Auth:
+        DefaultAuthorizer: CognitoRequestAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoRequestAuthorizer:
+            FunctionArn: !GetAtt CognitoAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
+              ReauthorizeEvery: 0
+            AuthorizerResultTtlInSeconds: 0
+            Type: REQUEST
       MethodSettings:
         - ResourcePath: "/*"
           HttpMethod: "*"
@@ -249,12 +278,19 @@ Resources:
       KeyType: API_KEY
       UsagePlanId: !Ref ApiUsagePlan
 
+  ApiWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: HasWebAcl
+    Properties:
+      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${AleenasCuisineApi}/stages/${Env}"
+      WebACLArn: !Ref WebAclArn
+
   # --- This Log Group must be defined *before* the Function and Filters that use it ---
   FastApiAppFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AppPrefix}-app"
-      RetentionInDays: 7
+      RetentionInDays: 90
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -269,8 +305,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AppPrefix}-app"
-      CodeUri: ../backend/app/
-      Handler: main.handler
+      CodeUri: ../backend/
+      Handler: app.main.handler
       Tracing: Active
       Environment:
         Variables:
@@ -278,9 +314,15 @@ Resources:
           REGION: !Ref AWS::Region
           DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
           DB_SECRET_ARN: !Ref DBSecret
+          DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
+          DB_PORT: !GetAtt AuroraCluster.Endpoint.Port
+          DB_NAME: aleenascuisine
           RAZORPAY_SECRET_ARN: !Ref RazorpaySecret
+          RAZORPAY_TEST_MODE: !If [IsProdEnv, "false", "true"]
           JWT_SECRET_ARN: !Ref JwtSecret
           WHATSAPP_SECRET_ARN: !Ref WhatsAppSecret
+          WHATSAPP_PHONE_NUMBER_ID: !Ref WhatsAppPhoneNumberId
+          WHATSAPP_DEFAULT_RECIPIENT: !Ref WhatsAppDefaultRecipient
           S3_BUCKET_IMAGES: !Ref ImagesBucket
           S3_BUCKET_INVOICES: !Ref InvoicesBucket
           POST_PAYMENT_QUEUE_URL: !Ref PostPaymentQueue
@@ -289,13 +331,28 @@ Resources:
           COGNITO_USER_POOL_ID: !Ref CognitoUserPool
           COGNITO_CLIENT_ID: !Ref CognitoClientId
           COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
+          ADMIN_NOTIFICATIONS_TOPIC_ARN: !Ref OrderNotificationsTopic
       Events:
+        ApiRoot:
+          Type: Api
+          Properties:
+            Path: /
+            Method: ANY
+            RestApiId: !Ref AleenasCuisineApi
         ApiProxy:
           Type: Api
           Properties:
             Path: /{proxy+}
             Method: ANY
             RestApiId: !Ref AleenasCuisineApi
+        RazorpayWebhook:
+          Type: Api
+          Properties:
+            Path: /api/v1/payments/webhook/razorpay
+            Method: POST
+            RestApiId: !Ref AleenasCuisineApi
+            Auth:
+              Authorizer: NONE
       Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
     DependsOn: FastApiAppFunctionLogGroup
 
@@ -315,11 +372,143 @@ Resources:
         - Key: CostCenter
           Value: cseproj
 
+  OrderNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AppPrefix}-order-events"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Project
+          Value: aleenascuisine
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  OrderNotificationsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn: !Ref OrderNotificationsTopic
+
+  OpsAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AppPrefix}-ops-alerts"
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Project
+          Value: aleenascuisine
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+
+  OpsAlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn: !Ref OpsAlertsTopic
+
+  WebhookFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppPrefix}-${Env}-webhook-failures"
+      AlarmDescription: "Alert when Razorpay webhook failures exceed threshold"
+      Namespace: AleenasCuisine/Application
+      MetricName: webhook_failures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Env
+      AlarmActions:
+        - !Ref OpsAlertsTopic
+
+  FastApiLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppPrefix}-${Env}-lambda-errors"
+      AlarmDescription: "Alert when FastAPI Lambda reports errors"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${AppPrefix}-app"
+      AlarmActions:
+        - !Ref OpsAlertsTopic
+
+  AuroraCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AppPrefix}-${Env}-aurora-capacity"
+      AlarmDescription: "Alert when Aurora serverless ACU approaches maximum"
+      Namespace: AWS/RDS
+      MetricName: ServerlessDatabaseCapacity
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1.8
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref AuroraCluster
+      AlarmActions:
+        - !Ref OpsAlertsTopic
+
   OrderPaidWorkerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AppPrefix}-order-paid-worker"
-      RetentionInDays: 7
+      RetentionInDays: 90
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  ReservationCleanupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-reservation-cleanup"
+      RetentionInDays: 90
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  CognitoAuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-authorizer"
+      RetentionInDays: 90
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -334,8 +523,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AppPrefix}-order-paid-worker"
-      CodeUri: ../backend/app/
-      Handler: workers.order_paid.handle
+      CodeUri: ../backend/
+      Handler: app.workers.order_paid.handle
       Timeout: 120
       Tracing: Active
       Environment:
@@ -343,9 +532,15 @@ Resources:
           REGION: !Ref AWS::Region
           DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
           DB_SECRET_ARN: !Ref DBSecret
+          DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
+          DB_PORT: !GetAtt AuroraCluster.Endpoint.Port
+          DB_NAME: aleenascuisine
           RAZORPAY_SECRET_ARN: !Ref RazorpaySecret
+          RAZORPAY_TEST_MODE: !If [IsProdEnv, "false", "true"]
           JWT_SECRET_ARN: !Ref JwtSecret
           WHATSAPP_SECRET_ARN: !Ref WhatsAppSecret
+          WHATSAPP_PHONE_NUMBER_ID: !Ref WhatsAppPhoneNumberId
+          WHATSAPP_DEFAULT_RECIPIENT: !Ref WhatsAppDefaultRecipient
           S3_BUCKET_INVOICES: !Ref InvoicesBucket
           POST_PAYMENT_QUEUE_URL: !Ref PostPaymentQueue
           ALEENA_ENV: !Ref Env
@@ -353,6 +548,7 @@ Resources:
           COGNITO_USER_POOL_ID: !Ref CognitoUserPool
           COGNITO_CLIENT_ID: !Ref CognitoClientId
           COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
+          ADMIN_NOTIFICATIONS_TOPIC_ARN: !Ref OrderNotificationsTopic
       Events:
         OrderPaidQueueEvent:
           Type: SQS
@@ -362,6 +558,52 @@ Resources:
             MaximumBatchingWindowInSeconds: 5
       Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
     DependsOn: OrderPaidWorkerLogGroup
+
+  ReservationCleanupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppPrefix}-reservation-cleanup"
+      CodeUri: ../backend/
+      Handler: app.workers.reservation_cleanup.handle
+      Timeout: 60
+      Tracing: Active
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
+          DB_SECRET_ARN: !Ref DBSecret
+          DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
+          DB_PORT: !GetAtt AuroraCluster.Endpoint.Port
+          DB_NAME: aleenascuisine
+          ALEENA_ENV: !Ref Env
+          LOG_LEVEL: !Ref LogLevel
+      Events:
+        ReservationSweep:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Name: !Sub "${AppPrefix}-reservation-sweep"
+            Description: "Expire stale cart reservations"
+      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
+    DependsOn: ReservationCleanupLogGroup
+
+  CognitoAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppPrefix}-authorizer"
+      CodeUri: ../backend/
+      Handler: app.authorizers.cognito_authorizer.handle
+      Timeout: 10
+      Tracing: Active
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
+          COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
+          LOG_LEVEL: !Ref LogLevel
+      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
+    DependsOn: CognitoAuthorizerLogGroup
 
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
@@ -661,6 +903,10 @@ Resources:
           FromPort: 3306
           ToPort: 3306
           SourceSecurityGroupId: !Ref EndpointSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -1087,6 +1333,16 @@ Resources:
                 Resource: !GetAtt KmsKey.Arn
               - Effect: Allow
                 Action:
+                  - rds-data:BatchExecuteStatement
+                  - rds-data:BeginTransaction
+                  - rds-data:CommitTransaction
+                  - rds-data:ExecuteStatement
+                  - rds-data:RollbackTransaction
+                Resource:
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AppPrefix}-aurora"
+                  - !Ref DBSecret
+              - Effect: Allow
+                Action:
                   - sqs:SendMessage
                   - sqs:GetQueueAttributes
                   - sqs:GetQueueUrl
@@ -1109,6 +1365,24 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:s3:::${InvoicesBucket}"
                   - !Sub "arn:aws:s3:::${InvoicesBucket}/*"
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref OrderNotificationsTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-app:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-order-paid-worker:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-reservation-cleanup:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-authorizer:*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -1544,3 +1818,6 @@ Outputs:
   KmsKeyArn:
     Description: ARN of the AleenasCuisine CMK.
     Value: !GetAtt KmsKey.Arn
+  OrderNotificationsTopicArn:
+    Description: SNS topic used for post-payment customer and admin notifications.
+    Value: !Ref OrderNotificationsTopic

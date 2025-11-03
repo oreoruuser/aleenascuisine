@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any, Iterable, Mapping, Sequence, Tuple
 
 from sqlalchemy import select
-from sqlalchemy.sql import Select
+from sqlalchemy.sql import ColumnElement, Select
 from sqlalchemy.orm import Session, joinedload
 
 from ..db.models import Cake, Cart, Order, OrderItem, Payment, RazorpayEvent, Refund
@@ -55,7 +55,9 @@ def _decimal(value: Decimal | float | int | None) -> float:
     return float(value)
 
 
-def _base_order_query(where: Select[bool] | None = None) -> Select[tuple[Order]]:
+def _base_order_query(
+    where: ColumnElement[bool] | None = None,
+) -> Select[tuple[Order]]:
     stmt = select(Order).options(
         joinedload(Order.items).joinedload(OrderItem.cake),
         joinedload(Order.payments),
@@ -113,8 +115,8 @@ def _release_inventory_hold(session: Session, order: Order) -> None:
     order.updated_at = _now()
 
 
-def _serialize_items(items: Iterable[OrderItem]) -> list[dict[str, object]]:
-    payload: list[dict[str, object]] = []
+def _serialize_items(items: Iterable[OrderItem]) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
     for item in items:
         payload.append(
             {
@@ -212,7 +214,7 @@ def create_order(
     order = Order(
         cart_id=cart.cart_id,
         customer_id=customer_id or cart.customer_id,
-        status="created",
+        status="pending",
         payment_status="pending",
         currency="INR",
         subtotal=totals["subtotal"],
@@ -244,8 +246,9 @@ def create_order(
         order_id=order.order_id,
         amount=order.total,
         currency=order.currency,
-        status="pending",
+        status="initiated",
         provider_payment_id=None,
+        is_test=is_test,
     )
     session.add(payment)
 
@@ -267,7 +270,7 @@ def list_orders(session: Session, customer_id: str) -> list[Order]:
     stmt = _base_order_query(Order.customer_id == customer_id).order_by(
         Order.created_at.desc()
     )
-    return session.execute(stmt).unique().scalars().all()
+    return list(session.execute(stmt).unique().scalars().all())
 
 
 def cancel_order(session: Session, order_id: str) -> Order:
@@ -300,7 +303,7 @@ def set_provider_order_reference(
 
 def apply_payment_event(
     session: Session, payload: Mapping[str, Any]
-) -> tuple[Order | None, Payment | None]:
+) -> tuple[Order | None, Payment | None, bool]:
     event_type = payload.get("event")
     payment_payload = (
         payload.get("payload", {})  # type: ignore[call-arg]
@@ -336,39 +339,66 @@ def apply_payment_event(
             payment.provider_payment_id = provider_payment_id
 
     if payment is None:
-        return None, None
+        return None, None, False
 
+    state_changed = False
     if provider_payment_id and payment.provider_payment_id != provider_payment_id:
         payment.provider_payment_id = provider_payment_id
+        state_changed = True
 
     order = payment.order
     if event_type and event_type.startswith("refund"):
-        payment.status = "refunded"
-        order.payment_status = "refunded"
-        order.status = "refunded"
-        _release_inventory_hold(session, order)
+        previous_status = payment.status
+        if previous_status != "refunded":
+            payment.status = "refunded"
+            state_changed = True
+        if order.payment_status != "refunded":
+            order.payment_status = "refunded"
+            state_changed = True
+        if order.status != "refunded":
+            order.status = "refunded"
+            state_changed = True
+        if state_changed:
+            _release_inventory_hold(session, order)
     else:
         status = payment_payload.get("status") or event_type
         if status:
-            payment.status = status
+            if payment.status != status:
+                payment.status = status
+                state_changed = True
             if order.status not in {"cancelled", "refunded"}:
                 if status in {"authorized", "captured"}:
-                    order.payment_status = (
+                    desired_payment_status = (
                         "paid" if status == "captured" else "authorized"
                     )
+                    if order.payment_status != desired_payment_status:
+                        order.payment_status = desired_payment_status
+                        state_changed = True
                     if order.status in {"created", "pending"}:
-                        order.status = "confirmed"
-                    order.reservation_expires_at = None
-                    order.inventory_released = False
+                        if order.status != "confirmed":
+                            order.status = "confirmed"
+                            state_changed = True
+                    if order.reservation_expires_at is not None:
+                        order.reservation_expires_at = None
+                        state_changed = True
+                    if order.inventory_released:
+                        order.inventory_released = False
+                        state_changed = True
                 elif status in {"failed", "declined"}:
-                    order.payment_status = "failed"
-                    order.status = "payment_failed"
-                    _release_inventory_hold(session, order)
+                    if order.payment_status != "failed":
+                        order.payment_status = "failed"
+                        state_changed = True
+                    if order.status != "payment_failed":
+                        order.status = "payment_failed"
+                        state_changed = True
+                    if state_changed:
+                        _release_inventory_hold(session, order)
 
-    order.updated_at = _now()
-    session.flush()
-    session.refresh(order)
-    return order, payment
+    if state_changed:
+        order.updated_at = _now()
+        session.flush()
+        session.refresh(order)
+    return order, payment, state_changed
 
 
 _ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
@@ -414,7 +444,7 @@ def update_order_status(session: Session, order_id: str, status: str) -> Order:
     return order
 
 
-def serialize_order_summary(order: Order) -> dict[str, object]:
+def serialize_order_summary(order: Order) -> dict[str, Any]:
     return {
         "order_id": order.order_id,
         "status": order.status,
@@ -425,13 +455,14 @@ def serialize_order_summary(order: Order) -> dict[str, object]:
         "items": _serialize_items(order.items),
         "reservation_expires_at": order.reservation_expires_at,
         "inventory_released": order.inventory_released,
+        "is_test": order.is_test,
     }
 
 
-def serialize_order_detail(order: Order) -> dict[str, object]:
+def serialize_order_detail(order: Order) -> dict[str, Any]:
     items_payload = _serialize_items(order.items)
 
-    totals = {
+    totals: dict[str, Any] = {
         "subtotal": _decimal(order.subtotal),
         "taxes": _decimal(order.taxes),
         "shipping": _decimal(order.shipping),
@@ -459,6 +490,8 @@ def serialize_order_detail(order: Order) -> dict[str, object]:
         "updated_at": order.updated_at,
         "reservation_expires_at": order.reservation_expires_at,
         "inventory_released": order.inventory_released,
+        "is_test": order.is_test,
+        "payment_is_test": order.payments[0].is_test if order.payments else False,
     }
 
 

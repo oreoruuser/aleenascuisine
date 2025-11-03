@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Sequence, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -15,6 +17,8 @@ from ...api.deps import (
     require_admin,
 )
 from ...core.config import get_settings
+from ...core.metrics import emit_metric
+from ...core.tracing import add_tracing_metadata, xray_subsegment
 from ...repositories import cart as cart_repo
 from ...repositories import orders as order_repo
 from ...schemas.common import ErrorResponse, RequestMetadata
@@ -34,6 +38,9 @@ from ...services.razorpay import RazorpayWebhookVerificationError
 from ...services.workflows import NotificationDispatcher
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+
+logger = logging.getLogger(__name__)
 
 
 def _order_not_found(order_id: str) -> HTTPException:
@@ -170,28 +177,36 @@ def create_order(
     settings=Depends(get_settings),
     razorpay=Depends(razorpay_service),
 ) -> Any:
+    start_time = time.perf_counter()
+    add_tracing_metadata(cart_id=payload.cart_id, customer_id=payload.customer_id)
     cart_reference = payload.cart_id or payload.customer_id
     if not cart_reference:
         raise _cart_missing(None)
 
     try:
-        cart = cart_repo.get_cart_by_reference(session, cart_reference)
+        with xray_subsegment("db.get_cart", cart_reference=cart_reference):
+            cart = cart_repo.get_cart_by_reference(session, cart_reference)
     except cart_repo.CartNotFoundError as exc:
         raise _cart_missing(cart_reference) from exc
 
     try:
-        order, created = order_repo.create_order(
-            session,
+        with xray_subsegment(
+            "db.create_order",
             idempotency_key=payload.idempotency_key,
-            cart=cart,
-            customer_id=payload.customer_id,
-            is_test=payload.is_test
-            if payload.is_test is not None
-            else settings.is_test_mode,
-            pricing=cart_repo.PricingRules.from_settings(settings),
-            price_match_tolerance=settings.price_match_tolerance,
-            reservation_ttl_minutes=settings.order_reservation_ttl_minutes,
-        )
+            is_test=payload.is_test,
+        ):
+            order, created = order_repo.create_order(
+                session,
+                idempotency_key=payload.idempotency_key,
+                cart=cart,
+                customer_id=payload.customer_id,
+                is_test=payload.is_test
+                if payload.is_test is not None
+                else settings.is_test_mode,
+                pricing=cart_repo.PricingRules.from_settings(settings),
+                price_match_tolerance=settings.price_match_tolerance,
+                reservation_ttl_minutes=settings.order_reservation_ttl_minutes,
+            )
     except order_repo.CartEmptyError as exc:
         raise _cart_empty(exc.args[0]) from exc
     except order_repo.InventoryUnavailableError as exc:
@@ -205,19 +220,42 @@ def create_order(
     if created and not order.provider_order_id:
         amount_paise = int(round(order.total * 100))
         try:
-            razorpay_result = razorpay.create_order(
-                amount_paise=amount_paise,
-                currency=order.currency,
-                receipt=order.order_id,
-                notes={"cart_id": order.cart_id, "customer_id": order.customer_id},
+            with xray_subsegment(
+                "external.razorpay.create_order",
                 test_mode=order.is_test,
-            )
+                amount_paise=amount_paise,
+            ):
+                razorpay_result = razorpay.create_order(
+                    amount_paise=amount_paise,
+                    currency=order.currency,
+                    receipt=order.order_id,
+                    notes={
+                        "cart_id": order.cart_id,
+                        "customer_id": order.customer_id,
+                    },
+                    test_mode=order.is_test,
+                )
         except Exception as exc:  # pragma: no cover - network interaction
             raise _razorpay_failure(str(exc)) from exc
         provider_order_id = razorpay_result.id
-        order_repo.set_provider_order_reference(session, order, provider_order_id)
+        with xray_subsegment("db.set_provider_reference"):
+            order_repo.set_provider_order_reference(session, order, provider_order_id)
 
     detail = OrderDetail(**order_repo.serialize_order_detail(order))
+    add_tracing_metadata(order_id=order.order_id, provider_order_id=provider_order_id)
+    duration_ms = round((time.perf_counter() - start_time) * 1000, 3)
+    emit_metric(
+        "order_processing_time",
+        duration_ms,
+        unit="Milliseconds",
+        dimensions={"Environment": settings.aleena_env},
+    )
+    if created:
+        emit_metric(
+            "orders_created",
+            1,
+            dimensions={"Environment": settings.aleena_env},
+        )
     return OrderCreateResponse(
         order=detail,
         provider_order_id=provider_order_id or "",
@@ -274,34 +312,113 @@ async def razorpay_webhook(
     metadata: RequestMetadata = Depends(request_metadata),
     razorpay=Depends(razorpay_service),
     dispatcher: NotificationDispatcher = Depends(notification_dispatcher),
+    settings=Depends(get_settings),
 ) -> Any:
     raw_body = await http_request.body()
+    # FastAPI normalizes header lookups to be case-insensitive, so always use lowercase here.
+    signature = http_request.headers.get("x-razorpay-signature")
     headers = {key: value for key, value in http_request.headers.items()}
-    signature = headers.get("X-Razorpay-Signature")
 
     try:
-        razorpay.verify_webhook_signature(raw_body, signature)
+        body_preview = raw_body.decode("utf-8")
+    except Exception:  # pragma: no cover - defensive guard for invalid encoding
+        body_preview = raw_body[:256].decode("utf-8", errors="replace")
+    logger.warning(
+        "razorpay_webhook_received",
+        extra={
+            "signature_header": signature or "",
+            "body_length": len(raw_body),
+        },
+    )
+    print(
+        "WEBHOOK_DEBUG signature=%s length=%s body=%s"
+        % (signature or "", len(raw_body), body_preview[:512])
+    )
+
+    try:
+        with xray_subsegment("external.razorpay.verify_webhook"):
+            razorpay.verify_webhook_signature(raw_body, signature)
     except RazorpayWebhookVerificationError as exc:
+        emit_metric(
+            "webhook_failures",
+            dimensions={
+                "Environment": settings.aleena_env,
+                "reason": "invalid_signature",
+            },
+        )
         raise _invalid_webhook_signature() from exc
 
     try:
         payload = await http_request.json()
     except Exception as exc:  # pragma: no cover - invalid JSON
+        emit_metric(
+            "webhook_failures",
+            dimensions={"Environment": settings.aleena_env, "reason": "invalid_json"},
+        )
         raise _invalid_webhook_payload(str(exc)) from exc
 
-    order_repo.record_webhook(
-        session,
-        headers=headers,
-        payload=payload,
-        signature=signature or "",
-    )
+    with xray_subsegment("db.record_webhook"):
+        order_repo.record_webhook(
+            session,
+            headers=headers,
+            payload=payload,
+            signature=signature or "",
+        )
 
-    order, payment = order_repo.apply_payment_event(session, payload)
-    if order and payment and payment.status in {"captured", "authorized"}:
+    with xray_subsegment("db.apply_payment_event", event=payload.get("event")):
+        order, payment, state_changed = order_repo.apply_payment_event(session, payload)
+    if not order or not payment:
+        emit_metric(
+            "webhook_failures",
+            dimensions={
+                "Environment": settings.aleena_env,
+                "reason": "payment_not_found",
+            },
+        )
+        return RazorpayWebhookResponse(accepted=True, request=metadata)
+    if (
+        order
+        and payment
+        and state_changed
+        and payment.status in {"captured", "authorized"}
+    ):
         dispatcher.send_order_confirmation(order)
         dispatcher.enqueue_post_payment_jobs(order)
+        emit_metric(
+            "payments_success",
+            dimensions={
+                "Environment": settings.aleena_env,
+                "TestMode": str(payment.is_test).lower(),
+            },
+        )
+        add_tracing_metadata(
+            order_id=order.order_id,
+            payment_id=payment.payment_id,
+            payment_status=payment.status,
+        )
+    elif order and payment and state_changed and payment.status == "refunded":
+        dispatcher.send_payment_status_update(order, "order.refunded")
+        add_tracing_metadata(payment_status="refunded")
+    elif (
+        order and payment and state_changed and payment.status in {"failed", "declined"}
+    ):
+        dispatcher.send_payment_status_update(order, "order.payment_failed")
+        add_tracing_metadata(payment_status=payment.status)
 
     return RazorpayWebhookResponse(accepted=True, request=metadata)
+
+
+# Register the webhook handler under the legacy orders-prefixed path so existing
+# Razorpay configuration keeps working while we expose a top-level payments route.
+router.add_api_route(
+    "/payments/webhook/razorpay",
+    razorpay_webhook,
+    methods=["POST"],
+    response_model=RazorpayWebhookResponse,
+    tags=["payments"],
+)
+
+router.include_router(payments_router)
 
 
 @payments_router.post("/refund", response_model=RefundResponse)
@@ -352,4 +469,10 @@ def request_refund(
     )
 
 
-router.include_router(payments_router)
+router.add_api_route(
+    "/payments/refund",
+    request_refund,
+    methods=["POST"],
+    response_model=RefundResponse,
+    tags=["payments"],
+)

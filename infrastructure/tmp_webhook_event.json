@@ -1,0 +1,51 @@
+{
+  "resource": "/{proxy+}",
+  "path": "/api/v1/payments/webhook/razorpay",
+  "httpMethod": "POST",
+  "headers": {
+    "x-razorpay-signature": "04f4f4bbe1737f97cfedf5dd76dd35c10857aa370c042a5dd9023c0e78ac615e",
+    "content-type": "application/json"
+  },
+  "multiValueHeaders": {
+    "x-razorpay-signature": ["04f4f4bbe1737f97cfedf5dd76dd35c10857aa370c042a5dd9023c0e78ac615e"],
+    "content-type": ["application/json"]
+  },
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": {
+    "proxy": "api/v1/payments/webhook/razorpay"
+  },
+  "stageVariables": null,
+  "requestContext": {
+    "resourceId": "any",
+    "resourcePath": "/{proxy+}",
+    "httpMethod": "POST",
+    "extendedRequestId": "local",
+    "requestTime": "03/Nov/2025:00:00:00 +0000",
+    "path": "/api/v1/payments/webhook/razorpay",
+    "accountId": "498192039865",
+    "protocol": "HTTP/1.1",
+    "stage": "dev",
+    "domainPrefix": "acxofqixx2",
+    "requestTimeEpoch": 0,
+    "requestId": "local-request",
+    "identity": {
+      "cognitoIdentityPoolId": null,
+      "accountId": null,
+      "cognitoIdentityId": null,
+      "caller": null,
+      "sourceIp": "127.0.0.1",
+      "principalOrgId": null,
+      "accessKey": null,
+      "cognitoAuthenticationType": null,
+      "cognitoAuthenticationProvider": null,
+      "userArn": null,
+      "userAgent": "curl/7.88.1",
+      "user": null
+    },
+    "domainName": "acxofqixx2.execute-api.ap-south-1.amazonaws.com",
+    "apiId": "acxofqixx2"
+  },
+  "body": "{\"event\":\"payment.captured\",\"payload\":{\"payment\":{\"entity\":{\"id\":\"pay_testcapture_001\",\"status\":\"captured\",\"order_id\":\"order_RbHxc4lx2pcTws\",\"amount\":49900,\"currency\":\"INR\"}},\"order\":{\"entity\":{\"id\":\"order_RbHxc4lx2pcTws\",\"amount\":49900,\"status\":\"paid\"}}}}",
+  "isBase64Encoded": false
+}

@@ -29,6 +29,11 @@ class NotificationDispatcher(Protocol):
     ) -> None:  # pragma: no cover - protocol
         ...
 
+    def send_payment_status_update(
+        self, order: Order, event_type: str
+    ) -> None:  # pragma: no cover - protocol
+        ...
+
 
 class LoggingNotificationDispatcher:
     """Default dispatcher that simply logs operations."""
@@ -42,6 +47,16 @@ class LoggingNotificationDispatcher:
         logger.info(
             "Post-payment jobs enqueued",
             extra={"order_id": order.order_id, "status": order.status},
+        )
+
+    def send_payment_status_update(self, order: Order, event_type: str) -> None:
+        logger.info(
+            "Payment status update notification queued",
+            extra={
+                "order_id": order.order_id,
+                "event_type": event_type,
+                "payment_status": order.payment_status,
+            },
         )
 
 
@@ -94,5 +109,19 @@ class SQSNotificationDispatcher:
                 "customer_id": order.customer_id,
                 "amount": float(order.total),
                 "currency": order.currency,
+            },
+        )
+
+    def send_payment_status_update(self, order: Order, event_type: str) -> None:
+        self._send(
+            event_type,
+            {
+                "order_id": order.order_id,
+                "customer_id": order.customer_id,
+                "status": order.status,
+                "payment_status": order.payment_status,
+                "total": float(order.total),
+                "currency": order.currency,
+                "is_test": order.is_test,
             },
         )

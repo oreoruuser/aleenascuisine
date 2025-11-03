@@ -5,4 +5,7 @@ SQLAlchemy==2.0.31
 alembic==1.13.2
 PyMySQL==1.1.1
 boto3==1.34.142
-razorpay==1.4.2
+razorpay==2.0.0
+pydantic==2.12.3
+pydantic-settings==2.5.2
+aws-xray-sdk==2.12.1

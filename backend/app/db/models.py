@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -77,8 +77,8 @@ class Cake(Base):
             "category": self.category,
             "stock_quantity": self.stock_quantity,
             "is_available": self.is_available,
-            "created_at": self.created_at or datetime.utcnow(),
-            "updated_at": self.updated_at or datetime.utcnow(),
+            "created_at": self.created_at or datetime.now(timezone.utc),
+            "updated_at": self.updated_at or datetime.now(timezone.utc),
         }
 
 
@@ -147,7 +147,7 @@ class Order(Base):
     )
     cart_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     customer_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="created")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     payment_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="pending"
     )
@@ -228,8 +228,9 @@ class Payment(Base):
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="initiated")
     provider_payment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

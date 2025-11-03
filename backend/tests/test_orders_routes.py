@@ -56,6 +56,9 @@ def test_order_lifecycle(client: TestClient, admin_headers: dict[str, str]) -> N
     assert provider_order_id
     payment_id = order_body["order"].get("payment_id")
     assert payment_id
+    assert order_body["order"]["status"] == "pending"
+    assert order_body["order"]["is_test"] is False
+    assert order_body["order"]["payment_is_test"] is False
 
     # Idempotency should return same order ID
     repeat_resp = client.post("/api/v1/orders", json=create_payload)
@@ -68,6 +71,7 @@ def test_order_lifecycle(client: TestClient, admin_headers: dict[str, str]) -> N
     assert list_payload["orders"][0]["order_id"] == order_id
     assert list_payload["orders"][0]["items"]
     assert list_payload["orders"][0]["payment_status"] == "pending"
+    assert list_payload["orders"][0]["is_test"] is False
 
     detail_resp = client.get(f"/api/v1/orders/{order_id}")
     assert detail_resp.status_code == 200
@@ -93,12 +97,22 @@ def test_order_lifecycle(client: TestClient, admin_headers: dict[str, str]) -> N
     assert webhook_resp.status_code == 200
     assert webhook_resp.json()["accepted"] is True
 
+    # Duplicate webhook should still succeed without altering state
+    webhook_resp_duplicate = client.post(
+        "/api/v1/orders/payments/webhook/razorpay",
+        json=webhook_payload,
+        headers={"X-Razorpay-Signature": "stub"},
+    )
+    assert webhook_resp_duplicate.status_code == 200
+    assert webhook_resp_duplicate.json()["accepted"] is True
+
     detail_after_webhook = client.get(f"/api/v1/orders/{order_id}")
     assert detail_after_webhook.status_code == 200
     assert detail_after_webhook.json()["order"]["payment_status"] in {
         "paid",
         "authorized",
     }
+    assert detail_after_webhook.json()["order"]["payment_is_test"] is False
 
     cancel_resp = client.post(f"/api/v1/orders/{order_id}/cancel")
     assert cancel_resp.status_code == 200

@@ -11,7 +11,10 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from ..core.config import Settings
+try:
+    from core.config import Settings
+except ImportError:  # pragma: no cover - fallback for local package layout
+    from ..core.config import Settings
 
 try:  # pragma: no cover - optional dependency for production mode
     import jwt  # type: ignore

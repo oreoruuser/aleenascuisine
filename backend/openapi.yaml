@@ -1,0 +1,539 @@
+openapi: 3.0.3
+info:
+  title: Aleena's Cuisine API
+  version: "1.0.0"
+  description: |
+    Backend API powering Aleena's Cuisine ordering platform. All responses use
+    structured JSON envelopes with a `request` metadata payload providing
+    request identifiers for traceability.
+servers:
+  - url: https://acxofqixx2.execute-api.ap-south-1.amazonaws.com/dev
+    description: Development stage
+  - url: https://api.aleenascuisine.com
+    description: Production stage
+security:
+  - cognitoUserPool: []
+paths:
+  /api/v1/health:
+    get:
+      tags: [health]
+      summary: Health probe
+      description: Returns service health, version metadata, and request identifier.
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/v1/cakes:
+    get:
+      tags: [cakes]
+      summary: List cakes
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: available_only
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Paginated list of cakes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CakeListResponse'
+  /api/v1/cakes/{cake_id}:
+    get:
+      tags: [cakes]
+      summary: Retrieve cake detail
+      parameters:
+        - $ref: '#/components/parameters/CakeId'
+      responses:
+        '200':
+          description: Cake detail payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CakeDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/cart:
+    post:
+      tags: [cart]
+      summary: Create or update a customer cart
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CartUpsertRequest'
+      responses:
+        '200':
+          description: Cart stored successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CartResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/orders:
+    post:
+      tags: [orders]
+      summary: Create an order and Razorpay order reference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreateRequest'
+      responses:
+        '200':
+          description: Order created or retrieved via idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/orders/{identifier}:
+    get:
+      tags: [orders]
+      summary: Fetch single order by id or list orders by customer id
+      parameters:
+        - in: path
+          name: identifier
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order detail or list of orders
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/OrderDetailResponse'
+                  - $ref: '#/components/schemas/OrderListResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/orders/{order_id}/cancel:
+    post:
+      tags: [orders]
+      summary: Cancel a pending order
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Order cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderCancelResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/orders/payments/webhook/razorpay:
+    post:
+      tags: [payments]
+      summary: Razorpay webhook receiver
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RazorpayWebhook'
+      responses:
+        '200':
+          description: Webhook accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RazorpayWebhookResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /api/v1/payments/refund:
+    post:
+      tags: [payments]
+      summary: Request a refund for a payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        '200':
+          description: Refund initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/admin/cakes:
+    post:
+      tags: [admin]
+      summary: Create a cake (admin privileged)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CakeUpsertRequest'
+      responses:
+        '201':
+          description: Cake created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CakeDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+components:
+  securitySchemes:
+    cognitoUserPool:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Cognito-issued JWT access or ID token
+  parameters:
+    CakeId:
+      in: path
+      name: cake_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      in: path
+      name: order_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Business rule conflict (inventory, pricing, etc.)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Requested entity not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    RequestMetadata:
+      type: object
+      properties:
+        request_id:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+        uptime_seconds:
+          type: number
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    CakeSummary:
+      type: object
+      properties:
+        cake_id:
+          type: string
+        name:
+          type: string
+        price:
+          type: number
+          format: float
+        currency:
+          type: string
+        is_available:
+          type: boolean
+        category:
+          type: string
+          nullable: true
+    CakeDetailResponse:
+      type: object
+      properties:
+        cake:
+          allOf:
+            - $ref: '#/components/schemas/CakeSummary'
+            - type: object
+              properties:
+                description:
+                  type: string
+                  nullable: true
+                image_url:
+                  type: string
+                  nullable: true
+                stock_quantity:
+                  type: integer
+                created_at:
+                  type: string
+                  format: date-time
+                updated_at:
+                  type: string
+                  format: date-time
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    CakeListResponse:
+      type: object
+      properties:
+        cakes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CakeSummary'
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    CartItem:
+      type: object
+      required: [cake_id, quantity, price_each]
+      properties:
+        cart_item_id:
+          type: string
+          nullable: true
+        cake_id:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        price_each:
+          type: number
+          format: float
+    CartUpsertRequest:
+      type: object
+      required: [customer_id, items]
+      properties:
+        customer_id:
+          type: string
+        cart_id:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItem'
+    CartTotals:
+      type: object
+      properties:
+        subtotal:
+          type: number
+        taxes:
+          type: number
+        shipping:
+          type: number
+        total:
+          type: number
+    CartResponse:
+      type: object
+      properties:
+        cart_id:
+          type: string
+        customer_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItem'
+        totals:
+          $ref: '#/components/schemas/CartTotals'
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    OrderItem:
+      type: object
+      properties:
+        cart_item_id:
+          type: string
+        cake_id:
+          type: string
+        quantity:
+          type: integer
+        price_each:
+          type: number
+        line_total:
+          type: number
+    OrderPayload:
+      type: object
+      properties:
+        order_id:
+          type: string
+        cart_id:
+          type: string
+          nullable: true
+        customer_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+        payment_status:
+          type: string
+        total:
+          type: number
+        currency:
+          type: string
+        provider_order_id:
+          type: string
+          nullable: true
+        provider_payment_id:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    OrderCreateRequest:
+      type: object
+      required: [idempotency_key, cart_id, customer_id, is_test]
+      properties:
+        idempotency_key:
+          type: string
+        cart_id:
+          type: string
+        customer_id:
+          type: string
+        is_test:
+          type: boolean
+    OrderCreateResponse:
+      type: object
+      properties:
+        order:
+          $ref: '#/components/schemas/OrderPayload'
+        provider_order_id:
+          type: string
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    OrderDetailResponse:
+      type: object
+      properties:
+        order:
+          $ref: '#/components/schemas/OrderPayload'
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    OrderListResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderPayload'
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    OrderCancelResponse:
+      type: object
+      properties:
+        order:
+          $ref: '#/components/schemas/OrderPayload'
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    RazorpayWebhook:
+      type: object
+      required: [event, payload]
+      properties:
+        event:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+    RazorpayWebhookResponse:
+      type: object
+      properties:
+        accepted:
+          type: boolean
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    RefundRequest:
+      type: object
+      required: [payment_id]
+      properties:
+        payment_id:
+          type: string
+        amount:
+          type: number
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+    RefundResponse:
+      type: object
+      properties:
+        payment_id:
+          type: string
+        refund_id:
+          type: string
+        status:
+          type: string
+        request:
+          $ref: '#/components/schemas/RequestMetadata'
+    CakeUpsertRequest:
+      type: object
+      required:
+        - name
+        - slug
+        - price
+        - currency
+        - category
+        - stock_quantity
+        - is_available
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+          nullable: true
+        price:
+          type: number
+          format: float
+        currency:
+          type: string
+        category:
+          type: string
+        stock_quantity:
+          type: integer
+        is_available:
+          type: boolean
+        image_url:
+          type: string
+          nullable: true

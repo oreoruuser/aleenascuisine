@@ -7,6 +7,7 @@ from typing import Dict
 
 from fastapi import HTTPException
 
+from ...core.logging import get_request_context
 from ...schemas.common import ErrorResponse
 
 
@@ -23,5 +24,6 @@ def not_implemented(endpoint: str) -> HTTPException:
 
 def build_request_metadata(request_id: str | None = None) -> Dict[str, str]:
     """Generate request metadata payload."""
-
+    if request_id is None:
+        request_id = get_request_context().get("request_id")
     return {"request_id": request_id or str(uuid.uuid4())}

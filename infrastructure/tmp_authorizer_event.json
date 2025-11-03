@@ -1,0 +1,8 @@
+{
+  "type": "REQUEST",
+  "methodArn": "arn:aws:execute-api:ap-south-1:498192039865:acxofqixx2/dev/POST/api/v1/payments/webhook/razorpay",
+  "headers": {
+    "X-Razorpay-Signature": "04f4f4bbe1737f97cfedf5dd76dd35c10857aa370c042a5dd9023c0e78ac615e",
+    "Content-Type": "application/json"
+  }
+}
