@@ -26,6 +26,7 @@ const formatJson = (value: unknown) =>
 
 const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL || "https://example.com";
 const defaultRazorpayKey = import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_xxx";
+const defaultRazorpayMode = import.meta.env.VITE_RAZORPAY_MODE || "test";
 
 function App() {
   const [apiBaseUrl, setApiBaseUrl] = useState(defaultBaseUrl);
@@ -37,6 +38,7 @@ function App() {
   const [lastResult, setLastResult] = useState<ApiResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [razorpayKey] = useState(defaultRazorpayKey);
+  const [razorpayMode] = useState(defaultRazorpayMode);
 
   const headers = useMemo(() => buildHeaders(apiKey, idToken), [apiKey, idToken]);
 
@@ -193,7 +195,7 @@ function App() {
           />
         </label>
         <p className="hint">
-          Razorpay key in use: <code>{razorpayKey}</code>
+          Razorpay key in use: <code>{razorpayKey}</code> ({razorpayMode} mode)
         </p>
         <button onClick={hitHealth} disabled={isLoading}>
           Ping /health
@@ -255,7 +257,9 @@ function App() {
               <strong>Status:</strong> {lastResult.status} · {lastResult.timestamp}
             </p>
             {lastResult.error && <pre>{lastResult.error}</pre>}
-            {lastResult.body && <pre>{formatJson(lastResult.body)}</pre>}
+            {typeof lastResult.body !== "undefined" && (
+              <pre>{formatJson(lastResult.body)}</pre>
+            )}
           </div>
         ) : (
           <p>No calls yet.</p>

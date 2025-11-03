@@ -21,6 +21,7 @@ Set these environment variables when deploying:
 
 - `VITE_API_BASE_URL` – full API Gateway endpoint that includes the `/api/v1` prefix.
 - `VITE_RAZORPAY_KEY_ID` – Razorpay key to display in the UI for quick verification.
+- `VITE_RAZORPAY_MODE` – indicates whether the key is `test` or `live` (used only for display).
 
 To generate a production bundle (upload the `dist/` folder to Amplify manual deployment):
 
