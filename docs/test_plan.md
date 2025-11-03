@@ -10,8 +10,8 @@ This plan enumerates functional, integration, end-to-end, security, and load sce
 | UT-03 | Unit | Notification dispatch | Run `pytest backend/tests/test_payment_pipeline.py::test_notification_service_dispatches_multiple_channels` | SQS/SNS/WhatsApp stubs invoked once |  |  |
 | IT-01 | Integration | Happy-path payment flow | a) Deploy to dev<br>b) Create cake, cart, order (`is_test=true`)<br>c) Trigger Razorpay capture webhook | Order status = `paid`, payment status = `captured`, invoice in S3 |  |  |
 | IT-02 | Integration | Duplicate webhook delivery | Replay capture webhook payload twice | Second delivery returns `accepted=true`, no duplicate SQS jobs |  |  |
-| IT-03 | Integration | Inventory guard | Attempt order with quantity exceeding stock | API returns `409 cart_price_mismatch` or `inventory_unavailable` |  |  |
-| IT-04 | Integration | Razorpay failure path | Trigger `payment.failed` webhook | Order status `payment_failed`, notification emitted |  |  |
+| IT-03 | Integration | Inventory guard | Attempt order with quantity exceeding stock | API returns `409 cart_price_mismatch` or `inventory_unavailable` | PASS | `2025-11-03T21:00Z` (dev) – cart `3eb40d70-8020-427f-96c3-eef334c8f2ba`, order POST returned `409 inventory_unavailable`; stock remained unchanged. |
+| IT-04 | Integration | Razorpay failure path | Trigger `payment.failed` webhook | Order status `payment_failed`, notification emitted | PASS | Order `ccaab9f6-a45f-4d0a-a848-118e2a523fe8` – sent signed webhook (payment `pay_0a2c20b5e2c840068bd74fafb0689915`); API responded `accepted=true` and order now `payment_failed` with inventory released. |
 | IT-05 | Integration | Refund processing | Trigger `refund.processed` webhook | Order status `refunded`, notification emitted |  |  |
 | E2E-01 | E2E | Customer checkout | Using frontend, add item -> checkout -> complete test payment | Customer sees order history entry with `paid` status |  |  |
 | E2E-02 | E2E | Admin stock update | Admin creates cake with image, adjusts stock | Cake visible to customers with updated stock |  |  |
