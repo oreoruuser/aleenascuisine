@@ -9,6 +9,7 @@ Conditions:
     - !Not [ !Equals [ !Ref KeyAdminArn, "NONE" ] ]
   HasAuroraScheduler: !Equals [ !Ref EnableAuroraScheduler, "true" ]
   HasCognitoClientId: !Not [ !Equals [ !Ref CognitoClientId, "" ] ]
+  HasCognitoDomainPrefix: !Not [ !Equals [ !Ref CognitoDomainPrefix, "" ] ]
   CreateLambdaExecutionRole: !Equals [ !Ref LambdaExecutionRoleArn, "" ]
   IsProdEnv: !Equals [ !Ref Env, "prod" ]
   HasWebAcl: !Not [ !Equals [ !Ref WebAclArn, "" ] ]
@@ -105,6 +106,21 @@ Parameters:
     Type: String
     Default: ""
     Description: App client ID from the Cognito user pool used by the backend.
+
+  CognitoDomainPrefix:
+    Type: String
+    Default: ""
+    Description: Unique prefix for the Cognito Hosted UI domain (leave empty to derive from AppPrefix).
+
+  CognitoCallbackUrl:
+    Type: String
+    Default: "http://localhost:5173/auth/callback"
+    Description: OAuth2 callback URL registered with the Cognito Hosted UI.
+
+  CognitoLogoutUrl:
+    Type: String
+    Default: "http://localhost:5173"
+    Description: Logout redirect URL registered with the Cognito Hosted UI.
 
   WebAclArn:
     Type: String
@@ -329,7 +345,7 @@ Resources:
           ALEENA_ENV: !Ref Env
           LOG_LEVEL: !Ref LogLevel
           COGNITO_USER_POOL_ID: !Ref CognitoUserPool
-          COGNITO_CLIENT_ID: !Ref CognitoClientId
+          COGNITO_CLIENT_ID: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
           COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
           ADMIN_NOTIFICATIONS_TOPIC_ARN: !Ref OrderNotificationsTopic
       Events:
@@ -546,7 +562,7 @@ Resources:
           ALEENA_ENV: !Ref Env
           LOG_LEVEL: !Ref LogLevel
           COGNITO_USER_POOL_ID: !Ref CognitoUserPool
-          COGNITO_CLIENT_ID: !Ref CognitoClientId
+          COGNITO_CLIENT_ID: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
           COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
           ADMIN_NOTIFICATIONS_TOPIC_ARN: !Ref OrderNotificationsTopic
       Events:
@@ -599,21 +615,132 @@ Resources:
         Variables:
           REGION: !Ref AWS::Region
           COGNITO_USER_POOL_ID: !Ref CognitoUserPool
-          COGNITO_CLIENT_ID: !Ref CognitoClientId
+          COGNITO_CLIENT_ID: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
           COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
           LOG_LEVEL: !Ref LogLevel
       Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
     DependsOn: CognitoAuthorizerLogGroup
 
+  CognitoPreSignUpLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-pre-signup"
+      RetentionInDays: 90
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+        - Key: Owner
+          Value: kevinMathew
+        - Key: CostCenter
+          Value: cseproj
+        - Key: Project
+          Value: aleenascuisine
+
+  CognitoPreSignUpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppPrefix}-pre-signup"
+      CodeUri: ../backend/
+      Handler: app.triggers.pre_signup.handle
+      Timeout: 5
+      MemorySize: 128
+      Tracing: Active
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref LogLevel
+      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
+    DependsOn: CognitoPreSignUpLogGroup
+
+  CognitoPreSignUpPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CognitoPreSignUpFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt CognitoUserPool.Arn
+
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: !Sub "${AppPrefix}-user-pool"
+      AutoVerifiedAttributes:
+        - email
+      LambdaConfig:
+        PreSignUp: !GetAtt CognitoPreSignUpFunction.Arn
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: "Verify your email for Aleena's Cuisine"
+        EmailMessage: "<p>Hello {{username}},</p><p>Your verification code is <strong>{{####}}</strong>.</p>"
+      Schema:
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: phone_number
+          AttributeDataType: String
+          Mutable: true
+          Required: false
       UserPoolTags:
         Project: aleenascuisine
         Owner: kevinMathew
         CostCenter: cseproj
         Env: !Ref Env
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !If [HasCognitoDomainPrefix, !Ref CognitoDomainPrefix, !Sub "${AppPrefix}-${Env}"]
+      UserPoolId: !Ref CognitoUserPool
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${AppPrefix}-spa"
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+      ReadAttributes:
+        - email
+        - email_verified
+        - phone_number
+        - name
+      WriteAttributes:
+        - email
+        - phone_number
+        - name
+      CallbackURLs:
+        - !Ref CognitoCallbackUrl
+      LogoutURLs:
+        - !Ref CognitoLogoutUrl
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+        - phone
+        - aws.cognito.signin.user.admin
+      PreventUserExistenceErrors: ENABLED
+      SupportedIdentityProviders:
+        - COGNITO
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      EnableTokenRevocation: true
 
   CognitoUserPoolIdParameter:
     Type: AWS::SSM::Parameter
@@ -630,12 +757,11 @@ Resources:
 
   CognitoClientIdParameter:
     Type: AWS::SSM::Parameter
-    Condition: HasCognitoClientId
     Properties:
       Name: !Sub "/${AppPrefix}/cognito/client-id"
       Description: Cognito app client ID for the backend service.
       Type: String
-      Value: !Ref CognitoClientId
+      Value: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
       Tags:
         Env: !Ref Env
         Project: aleenascuisine
