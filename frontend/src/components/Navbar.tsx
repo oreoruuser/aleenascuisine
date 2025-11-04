@@ -70,6 +70,9 @@ export const Navbar = () => {
               >
                 Create account
               </button>
+              <NavLink to="/verify" className={getActiveClass} style={linkStyle}>
+                Verify account
+              </NavLink>
             </>
           )}
         </nav>

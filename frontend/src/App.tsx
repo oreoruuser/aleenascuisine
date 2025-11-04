@@ -13,6 +13,7 @@ import { ProfilePage } from "./pages/Profile";
 import { OrderSuccessPage } from "./pages/OrderSuccess";
 import { NotFoundPage } from "./pages/NotFound";
 import { AuthCallbackPage } from "./pages/AuthCallback";
+import { VerifyAccountPage } from "./pages/VerifyAccount";
 
 const App = () => (
   <div className="app-shell">
@@ -25,6 +26,7 @@ const App = () => (
       <Route path="/cart" element={<CartPage />} />
       <Route path="/signin" element={<SignInPage />} />
       <Route path="/signup" element={<SignUpPage />} />
+  <Route path="/verify" element={<VerifyAccountPage />} />
       <Route path="/auth/callback" element={<AuthCallbackPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/checkout" element={<CheckoutPage />} />
