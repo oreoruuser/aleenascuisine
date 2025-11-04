@@ -6,7 +6,7 @@ s3_bucket = "aleenascuisine-sam-artifacts" # <-- This tells SAM to use your buck
 confirm_changeset = true
 disable_rollback = true
 capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
-parameter_overrides = "Env=\"dev\" AppPrefix=\"aleenascuisine-dev\" LambdaExecutionRoleArn=\"\" NotificationEmail=\"matkevin00@gmail.com\" ApiAllowedOrigin=\"http://localhost:3000\" MonthlyBudgetAmount=\"30\" KeyAdminArn=\"NONE\" EnableAuroraScheduler=\"true\" AuroraStartCron=\"cron(0 6 * * ? *)\" AuroraStopCron=\"cron(0 1 * * ? *)\" AuroraScheduleTimezone=\"Asia/Kolkata\" CognitoClientId=\"\" CognitoDomainPrefix=\"aleenascuisine\" CognitoCallbackUrl=\"http://localhost:5173/auth/callback\" CognitoLogoutUrl=\"http://localhost:5173\" WhatsAppPhoneNumberId=\"\" WhatsAppDefaultRecipient=\"\""
+parameter_overrides = "Env=\"dev\" AppPrefix=\"aleenascuisine-dev\" LambdaExecutionRoleArn=\"\" NotificationEmail=\"matkevin00@gmail.com\" ApiAllowedOrigin=\"http://localhost:3000\" MonthlyBudgetAmount=\"30\" KeyAdminArn=\"NONE\" EnableAuroraScheduler=\"true\" AuroraStartCron=\"cron(0 6 * * ? *)\" AuroraStopCron=\"cron(0 1 * * ? *)\" AuroraScheduleTimezone=\"Asia/Kolkata\" CognitoClientId=\"\" CognitoDomainPrefix=\"aleenascuisine\" CognitoCallbackUrl=\"http://localhost:5173/auth/callback,http://localhost:3000/auth/callback\" CognitoLogoutUrl=\"http://localhost:5173,http://localhost:3000\" WhatsAppPhoneNumberId=\"\" WhatsAppDefaultRecipient=\"\""
 image_repositories = []
 
 [dev.global.parameters]

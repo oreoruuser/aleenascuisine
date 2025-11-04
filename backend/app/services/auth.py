@@ -11,6 +11,9 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+
 try:
     from core.config import Settings
 except ImportError:  # pragma: no cover - fallback for local package layout
@@ -24,6 +27,10 @@ except ImportError:  # pragma: no cover - degrade when PyJWT unavailable
 
 class JWTVerificationError(Exception):
     """Raised when a JWT cannot be verified."""
+
+
+class CognitoSignupConfirmationError(Exception):
+    """Raised when a Cognito sign up confirmation fails."""
 
 
 @dataclass(frozen=True)
@@ -155,3 +162,44 @@ def principal_from_claims(claims: Mapping[str, Any]) -> Principal:
     return Principal(
         subject=subject, email=email, groups=frozenset(groups), claims=claims
     )
+
+
+def confirm_user_signup(settings: Settings, username: str, code: str) -> None:
+    """Confirm a Cognito hosted UI registration using the provided verification code."""
+
+    client_id = settings.cognito_client_id
+    if not client_id:
+        raise CognitoSignupConfirmationError(
+            "Cognito app client ID is not configured; unable to confirm sign up"
+        )
+
+    username = username.strip()
+    code = code.strip()
+    if not username or not code:
+        raise CognitoSignupConfirmationError(
+            "Username and verification code are required"
+        )
+
+    client = boto3.client("cognito-idp", region_name=settings.region)
+    try:
+        client.confirm_sign_up(
+            ClientId=client_id,
+            Username=username,
+            ConfirmationCode=code,
+        )
+    except client.exceptions.CodeMismatchException as exc:
+        raise CognitoSignupConfirmationError(
+            "The verification code is incorrect"
+        ) from exc
+    except client.exceptions.ExpiredCodeException as exc:
+        raise CognitoSignupConfirmationError(
+            "The verification code has expired"
+        ) from exc
+    except client.exceptions.UserNotFoundException as exc:
+        raise CognitoSignupConfirmationError(
+            "No account found for the provided username"
+        ) from exc
+    except (ClientError, BotoCoreError) as exc:
+        raise CognitoSignupConfirmationError(
+            "Unable to confirm sign up at this time"
+        ) from exc

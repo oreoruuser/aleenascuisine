@@ -7,14 +7,18 @@ import { curatedCakes } from "../data/cakes";
 type DisplayCake = CakeSummary & { description?: string; imageUrl?: string };
 
 export const MenuPage = () => {
-  const [items, setItems] = useState<DisplayCake[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<DisplayCake[]>(curatedCakes);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(
+    "Previewing our signature collection while we fetch today's availability."
+  );
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
+        setError(null);
         const menu = await fetchMenu();
         const curatedBySlug = new Map(curatedCakes.map((cake) => [cake.slug, cake]));
         const enriched = menu.map<DisplayCake>((cake) => {
@@ -30,15 +34,18 @@ export const MenuPage = () => {
           };
         });
         const remainingCurated = Array.from(curatedBySlug.values());
-        const combined = enriched.length
-          ? enriched.concat(remainingCurated)
-          : curatedCakes;
+        const combined = enriched.concat(remainingCurated);
         setItems(combined);
-        setError(enriched.length ? null : "Showing our signature collection while we refresh the live menu.");
+        setNotice(
+          enriched.length
+            ? null
+            : "We're showcasing our signature collection while the live menu refreshes."
+        );
       } catch (err) {
         const message = (err as { message?: string } | undefined)?.message || "Failed to load menu";
         setItems(curatedCakes);
-        setError(`${message}. Showing our signature collection for now.`);
+        setError(message);
+  setNotice("Displaying our signature collection while we reconnect to the kitchen API.");
       } finally {
         setLoading(false);
       }
@@ -46,10 +53,6 @@ export const MenuPage = () => {
 
     void load();
   }, []);
-
-  if (loading) {
-    return <Loader message="Loading menu" />;
-  }
 
   const categoryDescriptions: Record<string, string> = {
     Signature: "Our chef's award-winning centrepieces designed for milestone celebrations.",
@@ -91,7 +94,13 @@ export const MenuPage = () => {
         </div>
       </header>
 
-      {error ? <div className="alert alert--muted">{error}</div> : null}
+      {notice ? <div className="alert alert--muted">{notice}</div> : null}
+      {error ? <div className="alert alert--error">{error}</div> : null}
+      {loading ? (
+        <div className="menu__loading">
+          <Loader message="Refreshing today’s availability" />
+        </div>
+      ) : null}
 
       {groups.map(([category, catalog]) => (
         <section key={category} className="menu-section">

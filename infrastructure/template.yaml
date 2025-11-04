@@ -8,11 +8,9 @@ Conditions:
     - !Not [ !Equals [ !Ref KeyAdminArn, "" ] ]
     - !Not [ !Equals [ !Ref KeyAdminArn, "NONE" ] ]
   HasAuroraScheduler: !Equals [ !Ref EnableAuroraScheduler, "true" ]
-  HasCognitoClientId: !Not [ !Equals [ !Ref CognitoClientId, "" ] ]
-  HasCognitoDomainPrefix: !Not [ !Equals [ !Ref CognitoDomainPrefix, "" ] ]
-  CreateLambdaExecutionRole: !Equals [ !Ref LambdaExecutionRoleArn, "" ]
-  IsProdEnv: !Equals [ !Ref Env, "prod" ]
-  HasWebAcl: !Not [ !Equals [ !Ref WebAclArn, "" ] ]
+  CreateJwtSecret: !Equals [ !Ref ProvisionJwtSecret, "true" ]
+  CreateWhatsappSecret: !Equals [ !Ref ProvisionWhatsappSecret, "true" ]
+  ManageSecrets: !Equals [ !Ref ManageSecretsInStack, "true" ]
 
 # ===============================================
 # 1. PARAMETERS (STEP A)
@@ -27,6 +25,50 @@ Parameters:
     Type: String
     Default: aleenascuisine-dev
     Description: The prefix for all resources (e.g., aleenascuisine-dev).
+
+  ProjectName:
+    Type: String
+    Default: aleenascuisine
+    Description: Base namespace for shared resources such as Secrets Manager paths.
+
+  ApiVersion:
+    Type: String
+    Default: v1
+    Description: Semantic API version exposed to clients.
+
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
+      - WARN
+      - ERROR
+    Description: Log level used by the Lambda function.
+
+  ProvisionJwtSecret:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Toggle creation of the placeholder JWT secret. Enable when not using Cognito.
+
+  ProvisionWhatsappSecret:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Toggle creation of the placeholder WhatsApp secret.
+
+  ManageSecretsInStack:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set to true to let this stack create/update Secrets Manager entries (`${ProjectName}-${Env}/db` and `${ProjectName}-${Env}/razorpay`). Leave false to reuse existing secrets.
 
   LambdaExecutionRoleArn:
     Type: String
@@ -53,16 +95,6 @@ Parameters:
     Default: ""
     Description: IAM principal ARN granted administrative control of the CMK (set to NONE to skip dedicated admin access).
 
-  WhatsAppPhoneNumberId:
-    Type: String
-    Default: ""
-    Description: Optional WhatsApp Business phone number ID used for customer notifications.
-
-  WhatsAppDefaultRecipient:
-    Type: String
-    Default: ""
-    Description: Default WhatsApp recipient phone number in international format.
-
   EnableAuroraScheduler:
     Type: String
     Default: "true"
@@ -85,47 +117,6 @@ Parameters:
     Type: String
     Default: Asia/Kolkata
     Description: IANA timezone name for Aurora start/stop schedules.
-
-  ApiVersion:
-    Type: String
-    Default: v1
-    Description: Semantic version exposed by the public API.
-
-  LogLevel:
-    Type: String
-    Default: INFO
-    AllowedValues:
-      - CRITICAL
-      - ERROR
-      - WARNING
-      - INFO
-      - DEBUG
-    Description: Application logging verbosity for the Lambda function.
-
-  CognitoClientId:
-    Type: String
-    Default: ""
-    Description: App client ID from the Cognito user pool used by the backend.
-
-  CognitoDomainPrefix:
-    Type: String
-    Default: ""
-    Description: Unique prefix for the Cognito Hosted UI domain (leave empty to derive from AppPrefix).
-
-  CognitoCallbackUrl:
-    Type: String
-    Default: "http://localhost:5173/auth/callback"
-    Description: OAuth2 callback URL registered with the Cognito Hosted UI.
-
-  CognitoLogoutUrl:
-    Type: String
-    Default: "http://localhost:5173"
-    Description: Logout redirect URL registered with the Cognito Hosted UI.
-
-  WebAclArn:
-    Type: String
-    Default: ""
-    Description: Optional AWS WAFv2 Web ACL ARN associated with the API Gateway stage.
 
 # ===============================================
 # 2. GLOBALS (STEP A)
@@ -162,7 +153,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/api-gateway/${AppPrefix}-api"
-      RetentionInDays: 90
+      RetentionInDays: 7
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -212,18 +203,6 @@ Resources:
         AllowOrigin: !Sub "'${ApiAllowedOrigin}'"
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
-      Auth:
-        DefaultAuthorizer: CognitoRequestAuthorizer
-        AddDefaultAuthorizerToCorsPreflight: false
-        Authorizers:
-          CognitoRequestAuthorizer:
-            FunctionArn: !GetAtt CognitoAuthorizerFunction.Arn
-            Identity:
-              Headers:
-                - Authorization
-              ReauthorizeEvery: 0
-            AuthorizerResultTtlInSeconds: 0
-            Type: REQUEST
       MethodSettings:
         - ResourcePath: "/*"
           HttpMethod: "*"
@@ -294,19 +273,12 @@ Resources:
       KeyType: API_KEY
       UsagePlanId: !Ref ApiUsagePlan
 
-  ApiWebAclAssociation:
-    Type: AWS::WAFv2::WebACLAssociation
-    Condition: HasWebAcl
-    Properties:
-      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${AleenasCuisineApi}/stages/${Env}"
-      WebACLArn: !Ref WebAclArn
-
   # --- This Log Group must be defined *before* the Function and Filters that use it ---
   FastApiAppFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AppPrefix}-app"
-      RetentionInDays: 90
+      RetentionInDays: 7
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -321,452 +293,42 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AppPrefix}-app"
-      CodeUri: ../backend/
-      Handler: app.main.handler
+      CodeUri: ../backend/app/
+      Handler: main.handler
       Tracing: Active
       Environment:
         Variables:
           API_VERSION: !Ref ApiVersion
+          ALEENA_ENV: !Ref Env
           REGION: !Ref AWS::Region
-          DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
-          DB_SECRET_ARN: !Ref DBSecret
-          DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
-          DB_PORT: !GetAtt AuroraCluster.Endpoint.Port
-          DB_NAME: aleenascuisine
-          RAZORPAY_SECRET_ARN: !Ref RazorpaySecret
-          RAZORPAY_TEST_MODE: !If [IsProdEnv, "false", "true"]
-          JWT_SECRET_ARN: !Ref JwtSecret
-          WHATSAPP_SECRET_ARN: !Ref WhatsAppSecret
-          WHATSAPP_PHONE_NUMBER_ID: !Ref WhatsAppPhoneNumberId
-          WHATSAPP_DEFAULT_RECIPIENT: !Ref WhatsAppDefaultRecipient
+          LOG_LEVEL: !Ref LogLevel
+          DB_RESOURCE_ARN: !GetAtt AuroraCluster.Arn
+          DB_SECRET_ARN: !If [ManageSecrets, !GetAtt DBSecret.Arn, !Sub "${ProjectName}-${Env}/db"]
+          RAZORPAY_SECRET_ARN: !If [ManageSecrets, !GetAtt RazorpaySecret.Arn, !Sub "${ProjectName}-${Env}/razorpay"]
           S3_BUCKET_IMAGES: !Ref ImagesBucket
           S3_BUCKET_INVOICES: !Ref InvoicesBucket
-          POST_PAYMENT_QUEUE_URL: !Ref PostPaymentQueue
-          ALEENA_ENV: !Ref Env
-          LOG_LEVEL: !Ref LogLevel
-          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
-          COGNITO_CLIENT_ID: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
-          COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
-          ADMIN_NOTIFICATIONS_TOPIC_ARN: !Ref OrderNotificationsTopic
+          JWT_SECRET_ARN: !If [CreateJwtSecret, !GetAtt JwtSecret.Arn, ""]
+          WHATSAPP_SECRET_ARN: !If [CreateWhatsappSecret, !GetAtt WhatsappSecret.Arn, ""]
+          SKIP_SECRET_VALIDATION: "false"
       Events:
-        ApiRoot:
-          Type: Api
-          Properties:
-            Path: /
-            Method: ANY
-            RestApiId: !Ref AleenasCuisineApi
         ApiProxy:
           Type: Api
           Properties:
             Path: /{proxy+}
             Method: ANY
             RestApiId: !Ref AleenasCuisineApi
-        RazorpayWebhook:
-          Type: Api
-          Properties:
-            Path: /api/v1/payments/webhook/razorpay
-            Method: POST
-            RestApiId: !Ref AleenasCuisineApi
-            Auth:
-              Authorizer: NONE
-      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
+      Role: !Ref LambdaExecutionRoleArn
     DependsOn: FastApiAppFunctionLogGroup
-
-  PostPaymentQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub "${AppPrefix}-order-paid"
-      VisibilityTimeout: 300
-      MessageRetentionPeriod: 1209600
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Project
-          Value: aleenascuisine
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-
-  OrderNotificationsTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub "${AppPrefix}-order-events"
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Project
-          Value: aleenascuisine
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-
-  OrderNotificationsSubscription:
-    Type: AWS::SNS::Subscription
-    Properties:
-      Protocol: email
-      Endpoint: !Ref NotificationEmail
-      TopicArn: !Ref OrderNotificationsTopic
-
-  OpsAlertsTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub "${AppPrefix}-ops-alerts"
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Project
-          Value: aleenascuisine
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-
-  OpsAlertsSubscription:
-    Type: AWS::SNS::Subscription
-    Properties:
-      Protocol: email
-      Endpoint: !Ref NotificationEmail
-      TopicArn: !Ref OpsAlertsTopic
-
-  WebhookFailureAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${AppPrefix}-${Env}-webhook-failures"
-      AlarmDescription: "Alert when Razorpay webhook failures exceed threshold"
-      Namespace: AleenasCuisine/Application
-      MetricName: webhook_failures
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      DatapointsToAlarm: 1
-      Threshold: 5
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      Dimensions:
-        - Name: Environment
-          Value: !Ref Env
-      AlarmActions:
-        - !Ref OpsAlertsTopic
-
-  FastApiLambdaErrorAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${AppPrefix}-${Env}-lambda-errors"
-      AlarmDescription: "Alert when FastAPI Lambda reports errors"
-      Namespace: AWS/Lambda
-      MetricName: Errors
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      DatapointsToAlarm: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      Dimensions:
-        - Name: FunctionName
-          Value: !Sub "${AppPrefix}-app"
-      AlarmActions:
-        - !Ref OpsAlertsTopic
-
-  AuroraCapacityAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${AppPrefix}-${Env}-aurora-capacity"
-      AlarmDescription: "Alert when Aurora serverless ACU approaches maximum"
-      Namespace: AWS/RDS
-      MetricName: ServerlessDatabaseCapacity
-      Statistic: Maximum
-      Period: 300
-      EvaluationPeriods: 1
-      DatapointsToAlarm: 1
-      Threshold: 1.8
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      Dimensions:
-        - Name: DBClusterIdentifier
-          Value: !Ref AuroraCluster
-      AlarmActions:
-        - !Ref OpsAlertsTopic
-
-  OrderPaidWorkerLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-order-paid-worker"
-      RetentionInDays: 90
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-        - Key: Project
-          Value: aleenascuisine
-
-  ReservationCleanupLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-reservation-cleanup"
-      RetentionInDays: 90
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-        - Key: Project
-          Value: aleenascuisine
-
-  CognitoAuthorizerLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-authorizer"
-      RetentionInDays: 90
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-        - Key: Project
-          Value: aleenascuisine
-
-  OrderPaidWorkerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AppPrefix}-order-paid-worker"
-      CodeUri: ../backend/
-      Handler: app.workers.order_paid.handle
-      Timeout: 120
-      Tracing: Active
-      Environment:
-        Variables:
-          REGION: !Ref AWS::Region
-          DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
-          DB_SECRET_ARN: !Ref DBSecret
-          DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
-          DB_PORT: !GetAtt AuroraCluster.Endpoint.Port
-          DB_NAME: aleenascuisine
-          RAZORPAY_SECRET_ARN: !Ref RazorpaySecret
-          RAZORPAY_TEST_MODE: !If [IsProdEnv, "false", "true"]
-          JWT_SECRET_ARN: !Ref JwtSecret
-          WHATSAPP_SECRET_ARN: !Ref WhatsAppSecret
-          WHATSAPP_PHONE_NUMBER_ID: !Ref WhatsAppPhoneNumberId
-          WHATSAPP_DEFAULT_RECIPIENT: !Ref WhatsAppDefaultRecipient
-          S3_BUCKET_INVOICES: !Ref InvoicesBucket
-          POST_PAYMENT_QUEUE_URL: !Ref PostPaymentQueue
-          ALEENA_ENV: !Ref Env
-          LOG_LEVEL: !Ref LogLevel
-          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
-          COGNITO_CLIENT_ID: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
-          COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
-          ADMIN_NOTIFICATIONS_TOPIC_ARN: !Ref OrderNotificationsTopic
-      Events:
-        OrderPaidQueueEvent:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt PostPaymentQueue.Arn
-            BatchSize: 5
-            MaximumBatchingWindowInSeconds: 5
-      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
-    DependsOn: OrderPaidWorkerLogGroup
-
-  ReservationCleanupFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AppPrefix}-reservation-cleanup"
-      CodeUri: ../backend/
-      Handler: app.workers.reservation_cleanup.handle
-      Timeout: 60
-      Tracing: Active
-      Environment:
-        Variables:
-          REGION: !Ref AWS::Region
-          DB_RESOURCE_ARN: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster/${AppPrefix}-aurora"
-          DB_SECRET_ARN: !Ref DBSecret
-          DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
-          DB_PORT: !GetAtt AuroraCluster.Endpoint.Port
-          DB_NAME: aleenascuisine
-          ALEENA_ENV: !Ref Env
-          LOG_LEVEL: !Ref LogLevel
-      Events:
-        ReservationSweep:
-          Type: Schedule
-          Properties:
-            Schedule: rate(5 minutes)
-            Name: !Sub "${AppPrefix}-reservation-sweep"
-            Description: "Expire stale cart reservations"
-      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
-    DependsOn: ReservationCleanupLogGroup
-
-  CognitoAuthorizerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AppPrefix}-authorizer"
-      CodeUri: ../backend/
-      Handler: app.authorizers.cognito_authorizer.handle
-      Timeout: 10
-      Tracing: Active
-      Environment:
-        Variables:
-          REGION: !Ref AWS::Region
-          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
-          COGNITO_CLIENT_ID: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
-          COGNITO_CLIENT_SECRET_ARN: !Ref JwtSecret
-          LOG_LEVEL: !Ref LogLevel
-      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
-    DependsOn: CognitoAuthorizerLogGroup
-
-  CognitoPreSignUpLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AppPrefix}-pre-signup"
-      RetentionInDays: 90
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-        - Key: Project
-          Value: aleenascuisine
-
-  CognitoPreSignUpFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AppPrefix}-pre-signup"
-      CodeUri: ../backend/
-      Handler: app.triggers.pre_signup.handle
-      Timeout: 5
-      MemorySize: 128
-      Tracing: Active
-      Environment:
-        Variables:
-          LOG_LEVEL: !Ref LogLevel
-      Role: !If [HasLambdaExecutionRoleArn, !Ref LambdaExecutionRoleArn, !GetAtt DefaultLambdaExecutionRole.Arn]
-    DependsOn: CognitoPreSignUpLogGroup
-
-  CognitoPreSignUpPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt CognitoPreSignUpFunction.Arn
-      Principal: cognito-idp.amazonaws.com
-      SourceArn: !GetAtt CognitoUserPool.Arn
 
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: !Sub "${AppPrefix}-user-pool"
-      AutoVerifiedAttributes:
-        - email
-      LambdaConfig:
-        PreSignUp: !GetAtt CognitoPreSignUpFunction.Arn
-      EmailConfiguration:
-        EmailSendingAccount: COGNITO_DEFAULT
-      AccountRecoverySetting:
-        RecoveryMechanisms:
-          - Name: verified_email
-            Priority: 1
-      VerificationMessageTemplate:
-        DefaultEmailOption: CONFIRM_WITH_CODE
-        EmailSubject: "Verify your email for Aleena's Cuisine"
-        EmailMessage: "<p>Hello {{username}},</p><p>Your verification code is <strong>{{####}}</strong>.</p>"
-      Schema:
-        - Name: name
-          AttributeDataType: String
-          Mutable: true
-          Required: false
-        - Name: phone_number
-          AttributeDataType: String
-          Mutable: true
-          Required: false
       UserPoolTags:
         Project: aleenascuisine
         Owner: kevinMathew
         CostCenter: cseproj
         Env: !Ref Env
-
-  CognitoUserPoolDomain:
-    Type: AWS::Cognito::UserPoolDomain
-    Properties:
-      Domain: !If [HasCognitoDomainPrefix, !Ref CognitoDomainPrefix, !Sub "${AppPrefix}-${Env}"]
-      UserPoolId: !Ref CognitoUserPool
-
-  CognitoUserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      ClientName: !Sub "${AppPrefix}-spa"
-      UserPoolId: !Ref CognitoUserPool
-      GenerateSecret: false
-      ExplicitAuthFlows:
-        - ALLOW_REFRESH_TOKEN_AUTH
-        - ALLOW_USER_PASSWORD_AUTH
-        - ALLOW_USER_SRP_AUTH
-      ReadAttributes:
-        - email
-        - email_verified
-        - phone_number
-        - name
-      WriteAttributes:
-        - email
-        - phone_number
-        - name
-      CallbackURLs:
-        - !Ref CognitoCallbackUrl
-      LogoutURLs:
-        - !Ref CognitoLogoutUrl
-      AllowedOAuthFlowsUserPoolClient: true
-      AllowedOAuthFlows:
-        - code
-      AllowedOAuthScopes:
-        - email
-        - openid
-        - profile
-        - phone
-        - aws.cognito.signin.user.admin
-      PreventUserExistenceErrors: ENABLED
-      SupportedIdentityProviders:
-        - COGNITO
-      RefreshTokenValidity: 30
-      AccessTokenValidity: 1
-      IdTokenValidity: 1
-      TokenValidityUnits:
-        AccessToken: hours
-        IdToken: hours
-        RefreshToken: days
-      EnableTokenRevocation: true
-
-  CognitoUserPoolIdParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/${AppPrefix}/cognito/user-pool-id"
-      Description: Cognito user pool ID for the backend service.
-      Type: String
-      Value: !Ref CognitoUserPool
-      Tags:
-        Env: !Ref Env
-        Project: aleenascuisine
-        Owner: kevinMathew
-        CostCenter: cseproj
-
-  CognitoClientIdParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/${AppPrefix}/cognito/client-id"
-      Description: Cognito app client ID for the backend service.
-      Type: String
-      Value: !If [HasCognitoClientId, !Ref CognitoClientId, !Ref CognitoUserPoolClient]
-      Tags:
-        Env: !Ref Env
-        Project: aleenascuisine
-        Owner: kevinMathew
-        CostCenter: cseproj
 
   ##################################################
   # B. NETWORKING (VPC, SUBNETS, NAT, ENDPOINTS)
@@ -1029,10 +591,6 @@ Resources:
           FromPort: 3306
           ToPort: 3306
           SourceSecurityGroupId: !Ref EndpointSecurityGroup
-        - IpProtocol: tcp
-          FromPort: 3306
-          ToPort: 3306
-          SourceSecurityGroupId: !Ref LambdaSecurityGroup
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -1188,8 +746,22 @@ Resources:
       Engine: aurora-mysql
       DBClusterParameterGroupName: !Ref DBParameterGroup
       EnableHttpEndpoint: true
-      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
+      MasterUsername: !If
+        - ManageSecrets
+        - !Sub
+          - '{{resolve:secretsmanager:${DbSecretArn}:SecretString:username}}'
+          - DbSecretArn: !GetAtt DBSecret.Arn
+        - !Sub
+          - '{{resolve:secretsmanager:${DbSecretName}:SecretString:username}}'
+          - DbSecretName: !Sub '${ProjectName}-${Env}/db'
+      MasterUserPassword: !If
+        - ManageSecrets
+        - !Sub
+          - '{{resolve:secretsmanager:${DbSecretArn}:SecretString:password}}'
+          - DbSecretArn: !GetAtt DBSecret.Arn
+        - !Sub
+          - '{{resolve:secretsmanager:${DbSecretName}:SecretString:password}}'
+          - DbSecretName: !Sub '${ProjectName}-${Env}/db'
       StorageEncrypted: true
       KmsKeyId: !Ref KmsKey
       BackupRetentionPeriod: 7
@@ -1421,109 +993,13 @@ Resources:
       AliasName: !Sub "alias/${AppPrefix}-key"
       TargetKeyId: !Ref KmsKey
 
-  DefaultLambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Condition: CreateLambdaExecutionRole
-    Properties:
-      RoleName: !Sub "${AppPrefix}-lambda-role"
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-      Policies:
-        - PolicyName: !Sub "${AppPrefix}-lambda-inline"
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:DescribeSecret
-                Resource:
-                  - !Ref DBSecret
-                  - !Ref RazorpaySecret
-                  - !Ref JwtSecret
-                  - !Ref WhatsAppSecret
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:Encrypt
-                  - kms:ReEncrypt*
-                  - kms:GenerateDataKey*
-                  - kms:DescribeKey
-                Resource: !GetAtt KmsKey.Arn
-              - Effect: Allow
-                Action:
-                  - rds-data:BatchExecuteStatement
-                  - rds-data:BeginTransaction
-                  - rds-data:CommitTransaction
-                  - rds-data:ExecuteStatement
-                  - rds-data:RollbackTransaction
-                Resource:
-                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AppPrefix}-aurora"
-                  - !Ref DBSecret
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:GetQueueAttributes
-                  - sqs:GetQueueUrl
-                Resource: !GetAtt PostPaymentQueue.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:DeleteMessageBatch
-                  - sqs:ChangeMessageVisibility
-                  - sqs:ChangeMessageVisibilityBatch
-                  - sqs:GetQueueAttributes
-                  - sqs:GetQueueUrl
-                Resource: !GetAtt PostPaymentQueue.Arn
-              - Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub "arn:aws:s3:::${InvoicesBucket}"
-                  - !Sub "arn:aws:s3:::${InvoicesBucket}/*"
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: !Ref OrderNotificationsTopic
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogStreams
-                Resource:
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-app:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-order-paid-worker:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-reservation-cleanup:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppPrefix}-authorizer:*"
-              - Effect: Allow
-                Action:
-                  - cloudwatch:PutMetricData
-                Resource: "*"
-      Tags:
-        - Key: Env
-          Value: !Ref Env
-        - Key: Owner
-          Value: kevinMathew
-        - Key: CostCenter
-          Value: cseproj
-        - Key: Project
-          Value: aleenascuisine
-
   RazorpaySecret:
+    Condition: ManageSecrets
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub "${AppPrefix}/razorpay"
+      Name: !Sub "${ProjectName}-${Env}/razorpay"
       Description: "Razorpay API keys for aleenascuisine"
+      SecretString: '{"note": "Populate via backend/scripts/bootstrap_secrets.py"}'
       KmsKeyId: !Ref KmsKey
       Tags:
         - Key: Env
@@ -1536,13 +1012,14 @@ Resources:
           Value: aleenascuisine
 
   DBSecret:
+    Condition: ManageSecrets
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub "${AppPrefix}/db"
-      Description: "Database master credentials for aleenascuisine"
+      Name: !Sub "${ProjectName}-${Env}/db"
+      Description: "Aurora Data API credentials for aleenascuisine"
       KmsKeyId: !Ref KmsKey
       GenerateSecretString:
-        SecretStringTemplate: '{"username": "admin"}'
+        SecretStringTemplate: '{"username": "aleena_app_user", "database": "aleena_app", "resourceArn": "REPLACE_ME", "engine": "aurora-mysql", "host": "", "port": 3306}'
         GenerateStringKey: "password"
         PasswordLength: 16
         ExcludeCharacters: '"@/\'
@@ -1557,10 +1034,12 @@ Resources:
           Value: aleenascuisine
 
   JwtSecret:
+    Condition: CreateJwtSecret
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub "${AppPrefix}/jwt"
-      Description: "JWT signing material for aleenascuisine"
+      Name: !Sub "${ProjectName}/${Env}/jwt"
+      Description: "JWT signing secret placeholder for aleenascuisine"
+      SecretString: '{"note": "Populate signing keys via bootstrap script."}'
       KmsKeyId: !Ref KmsKey
       Tags:
         - Key: Env
@@ -1572,11 +1051,13 @@ Resources:
         - Key: Project
           Value: aleenascuisine
 
-  WhatsAppSecret:
+  WhatsappSecret:
+    Condition: CreateWhatsappSecret
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub "${AppPrefix}/whatsapp"
-      Description: "WhatsApp integration credentials for aleenascuisine"
+      Name: !Sub "${ProjectName}/${Env}/whatsapp"
+      Description: "WhatsApp integration credentials placeholder"
+      SecretString: '{"note": "Populate WhatsApp credentials when integration begins."}'
       KmsKeyId: !Ref KmsKey
       Tags:
         - Key: Env
@@ -1944,6 +1425,17 @@ Outputs:
   KmsKeyArn:
     Description: ARN of the AleenasCuisine CMK.
     Value: !GetAtt KmsKey.Arn
-  OrderNotificationsTopicArn:
-    Description: SNS topic used for post-payment customer and admin notifications.
-    Value: !Ref OrderNotificationsTopic
+  DbSecretArn:
+    Description: Identifier used to resolve the Aurora Data API credentials secret.
+    Value: !If [ManageSecrets, !GetAtt DBSecret.Arn, !Sub "${ProjectName}-${Env}/db"]
+  RazorpaySecretArn:
+    Description: Identifier used to resolve the Razorpay credentials secret.
+    Value: !If [ManageSecrets, !GetAtt RazorpaySecret.Arn, !Sub "${ProjectName}-${Env}/razorpay"]
+  JwtSecretArn:
+    Condition: CreateJwtSecret
+    Description: Secrets Manager ARN for the optional JWT configuration.
+    Value: !GetAtt JwtSecret.Arn
+  WhatsappSecretArn:
+    Condition: CreateWhatsappSecret
+    Description: Secrets Manager ARN for the optional WhatsApp configuration.
+    Value: !GetAtt WhatsappSecret.Arn

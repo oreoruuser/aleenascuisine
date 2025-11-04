@@ -415,6 +415,12 @@ a {
   color: rgba(55, 48, 163, 0.9);
 }
 
+.alert--error {
+  background: rgba(239, 68, 68, 0.12);
+  color: rgba(220, 38, 38, 0.95);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
 .card {
   background: var(--card-bg);
   border-radius: var(--radius-large);
@@ -433,6 +439,12 @@ a {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+
+.menu__loading {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0 0;
 }
 
 .menu-section__header {

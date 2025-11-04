@@ -88,7 +88,7 @@ export const VerifyAccountPage = () => {
     }
     if (!cleanCode) {
       setError(
-        "We couldn’t find a verification code in this link. Please open the email titled \"Verify your new account\" and follow the link again."
+  "We couldn't find a verification code in this link. Please open the email titled \"Verify your new account\" and follow the link again."
       );
       setStatus("error");
       return;

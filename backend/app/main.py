@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from contextlib import contextmanager
+from typing import Iterator
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
@@ -20,6 +22,8 @@ from .core.logging import (
     update_request_context,
 )
 from .core.tracing import init_tracing
+from .db.session import configure_engine, get_db_session
+from .services.catalog_seed import seed_curated_catalog
 
 settings = get_settings()
 init_tracing(f"aleenascuisine-{settings.aleena_env}")
@@ -28,6 +32,32 @@ configure_logging(settings.log_level)
 app = FastAPI(title="Aleena's Cuisine API")
 
 app.include_router(api_router, prefix=settings.api_prefix)
+
+
+@contextmanager
+def _session_scope(database_url: str) -> Iterator:
+    session_iter = get_db_session(database_url)
+    session = next(session_iter)
+    try:
+        yield session
+    finally:
+        try:
+            next(session_iter)
+        except StopIteration:
+            pass
+
+
+@app.on_event("startup")
+def seed_catalog() -> None:
+    database_url = settings.database_url or "sqlite:///./aleena_dev.db"
+    configure_engine(database_url)
+    with _session_scope(database_url) as session:
+        inserted, updated = seed_curated_catalog(session)
+        if inserted or updated:
+            logging.getLogger("app.seed").info(
+                "catalog_seed_startup",
+                extra={"inserted": inserted, "updated": updated},
+            )
 
 
 @app.middleware("http")
